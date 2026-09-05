@@ -108,9 +108,10 @@ class _RegisterScreenState extends State<RegisterScreen> {
         _showSnackbar(errorMsg);
       }
     } catch (e) {
+      debugPrint('Registration connection error: $e');
       if (mounted) {
         setState(() => _loading = false);
-        _showSnackbar('Gagal terhubung ke server');
+        _showSnackbar('Gagal terhubung ke ${ApiHelper.baseUrl}');
       }
     }
   }

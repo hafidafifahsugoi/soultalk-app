@@ -17,10 +17,16 @@ class ApiHelper {
     try {
       final prefs = await SharedPreferences.getInstance();
       final savedUrl = prefs.getString('custom_server_url');
-      if (savedUrl != null && savedUrl.trim().isNotEmpty) {
+      if (savedUrl != null &&
+          savedUrl.trim().isNotEmpty &&
+          !savedUrl.contains('soultalk-app-sigma') &&
+          !savedUrl.contains('soultalk-app.')) {
         _resolvedBaseUrl = savedUrl.trim();
         debugPrint('SoulTalk AI Server using saved custom URL: $_resolvedBaseUrl');
         return;
+      } else {
+        // Clear obsolete saved server URL from previous project
+        await prefs.remove('custom_server_url');
       }
     } catch (_) {}
 
