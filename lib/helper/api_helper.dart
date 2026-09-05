@@ -3,7 +3,7 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiHelper {
-  static String _resolvedBaseUrl = 'https://soultalk-app-sigma.vercel.app';
+  static String _resolvedBaseUrl = 'https://backend-pi-ten-58.vercel.app';
 
   static String get baseUrl => _resolvedBaseUrl;
 
@@ -11,7 +11,7 @@ class ApiHelper {
     await loadToken();
 
     // Default to the online cloud server
-    _resolvedBaseUrl = 'https://soultalk-app-sigma.vercel.app';
+    _resolvedBaseUrl = 'https://backend-pi-ten-58.vercel.app';
 
     // Check if user previously saved a custom server URL
     try {
@@ -30,7 +30,7 @@ class ApiHelper {
 
     // Candidates to test for the server
     final candidates = [
-      'https://soultalk-app-sigma.vercel.app', // Vercel Cloud Server (Online 24/7)
+      'https://backend-pi-ten-58.vercel.app', // New Vercel Cloud Server (Online 24/7)
       'http://192.168.1.9:8000',               // PC Wi-Fi IP
       'http://localhost:8000',                 // Works if using USB adb reverse
       'http://10.0.2.2:8000',                  // Android Emulator

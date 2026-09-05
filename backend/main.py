@@ -27,25 +27,38 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+import urllib.parse
+
 # Middleware to normalize Vercel serverless rewritten paths
 @app.middleware("http")
 async def normalize_vercel_paths(request, call_next):
-    # Check if Vercel provided original path in headers
-    matched_path = request.headers.get("x-matched-path")
-    forwarded_uri = request.headers.get("x-forwarded-uri")
-    
-    orig = matched_path or forwarded_uri
-    if orig and not orig.startswith("/api/index.py"):
-        request.scope["path"] = orig.split("?")[0]
+    # 1. Check if Vercel provided route capture groups (e.g. 1=api%2Fauth%2Fregister)
+    route_matches = request.headers.get("x-now-route-matches")
+    if route_matches:
+        for part in route_matches.split("&"):
+            if "=" in part:
+                k, v = part.split("=", 1)
+                decoded = urllib.parse.unquote(v)
+                if not decoded.startswith("/"):
+                    decoded = "/" + decoded
+                request.scope["path"] = decoded.split("?")[0]
+                break
     else:
-        path = request.scope.get("path", "")
-        for prefix in ["/main.py", "/api/index.py", "/index.py"]:
-            if path == prefix:
-                request.scope["path"] = "/"
-                break
-            elif path.startswith(prefix + "/"):
-                request.scope["path"] = path[len(prefix):]
-                break
+        # 2. Check x-forwarded-uri or other headers
+        matched_path = request.headers.get("x-matched-path")
+        forwarded_uri = request.headers.get("x-forwarded-uri")
+        orig = matched_path or forwarded_uri
+        if orig and not orig.startswith("/api/index.py"):
+            request.scope["path"] = orig.split("?")[0]
+        else:
+            path = request.scope.get("path", "")
+            for prefix in ["/main.py", "/api/index.py", "/index.py"]:
+                if path == prefix:
+                    request.scope["path"] = "/"
+                    break
+                elif path.startswith(prefix + "/"):
+                    request.scope["path"] = path[len(prefix):]
+                    break
     return await call_next(request)
 
 # Initialize database tables
@@ -153,12 +166,19 @@ def check_and_update_quota(user_id: int):
 #  API Endpoints
 # ─────────────────────────────────────────────────────────────
 
+from fastapi import Request
+
 @app.get("/")
 @app.get("/api")
 @app.get("/api/")
 @app.get("/main.py")
-def home():
-    return {"status": "running", "service": "SoulTalk AI Backend API"}
+def home(request: Request):
+    return {
+        "status": "running",
+        "service": "SoulTalk AI Backend API",
+        "scope_path": request.scope.get("path"),
+        "raw_headers": dict(request.headers)
+    }
 
 @app.post("/api/auth/register")
 @app.post("/auth/register")
