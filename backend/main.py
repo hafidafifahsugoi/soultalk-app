@@ -27,6 +27,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Middleware to normalize Vercel serverless rewritten paths
+@app.middleware("http")
+async def normalize_vercel_paths(request, call_next):
+    path = request.scope.get("path", "")
+    for prefix in ["/main.py", "/api/index.py", "/index.py"]:
+        if path.startswith(prefix):
+            new_path = path[len(prefix):] or "/"
+            request.scope["path"] = new_path
+            break
+    return await call_next(request)
+
 # Initialize database tables
 init_db()
 
@@ -133,6 +144,8 @@ def check_and_update_quota(user_id: int):
 # ─────────────────────────────────────────────────────────────
 
 @app.get("/")
+@app.get("/api")
+@app.get("/api/")
 @app.get("/main.py")
 def home():
     return {"status": "running", "service": "SoulTalk AI Backend API"}
