@@ -32,33 +32,37 @@ import urllib.parse
 # Middleware to normalize Vercel serverless rewritten paths
 @app.middleware("http")
 async def normalize_vercel_paths(request, call_next):
-    # 1. Check if Vercel provided route capture groups (e.g. 1=api%2Fauth%2Fregister)
-    route_matches = request.headers.get("x-now-route-matches")
-    if route_matches:
-        for part in route_matches.split("&"):
-            if "=" in part:
-                k, v = part.split("=", 1)
-                decoded = urllib.parse.unquote(v)
-                if not decoded.startswith("/"):
-                    decoded = "/" + decoded
-                request.scope["path"] = decoded.split("?")[0]
-                break
+    # 1. Check if Vercel passed path via query param __path
+    q_path = request.query_params.get("__path")
+    if q_path:
+        if not q_path.startswith("/"):
+            q_path = "/" + q_path
+        request.scope["path"] = q_path.split("?")[0]
     else:
-        # 2. Check x-forwarded-uri or other headers
-        matched_path = request.headers.get("x-matched-path")
-        forwarded_uri = request.headers.get("x-forwarded-uri")
-        orig = matched_path or forwarded_uri
-        if orig and not orig.startswith("/api/index.py"):
-            request.scope["path"] = orig.split("?")[0]
+        # 2. Check if Vercel provided route capture groups (e.g. 1=api%2Fauth%2Fregister)
+        route_matches = request.headers.get("x-now-route-matches")
+        if route_matches:
+            for part in route_matches.split("&"):
+                if "=" in part:
+                    k, v = part.split("=", 1)
+                    decoded = urllib.parse.unquote(v)
+                    if not decoded.startswith("/"):
+                        decoded = "/" + decoded
+                    request.scope["path"] = decoded.split("?")[0]
+                    break
         else:
-            path = request.scope.get("path", "")
-            for prefix in ["/main.py", "/api/index.py", "/index.py"]:
-                if path == prefix:
+            # 3. Check x-forwarded-uri or other headers
+            matched_path = request.headers.get("x-matched-path")
+            forwarded_uri = request.headers.get("x-forwarded-uri")
+            orig = matched_path or forwarded_uri
+            if orig and not orig.startswith("/api/index.py"):
+                request.scope["path"] = orig.split("?")[0]
+            else:
+                path = request.scope.get("path", "")
+                if path in ["/main.py", "/api/index.py", "/index.py"]:
                     request.scope["path"] = "/"
-                    break
-                elif path.startswith(prefix + "/"):
-                    request.scope["path"] = path[len(prefix):]
-                    break
+                elif path.startswith("/api/index.py/"):
+                    request.scope["path"] = path[len("/api/index.py"):]
     return await call_next(request)
 
 # Initialize database tables
