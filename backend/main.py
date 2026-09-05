@@ -133,6 +133,7 @@ def check_and_update_quota(user_id: int):
 # ─────────────────────────────────────────────────────────────
 
 @app.get("/")
+@app.get("/main.py")
 def home():
     return {"status": "running", "service": "SoulTalk AI Backend API"}
 
