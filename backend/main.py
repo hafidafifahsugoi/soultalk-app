@@ -16,7 +16,7 @@ import google.generativeai as genai
 from database import get_db_connection, init_db
 import auth
 
-app = FastAPI(title="SoulTalk AI Backend Server")
+app = FastAPI(title="SoulTalk AI Backend Server", redirect_slashes=False)
 
 # Enable CORS for local testing from Flutter
 app.add_middleware(
@@ -30,12 +30,22 @@ app.add_middleware(
 # Middleware to normalize Vercel serverless rewritten paths
 @app.middleware("http")
 async def normalize_vercel_paths(request, call_next):
-    path = request.scope.get("path", "")
-    for prefix in ["/main.py", "/api/index.py", "/index.py"]:
-        if path.startswith(prefix):
-            new_path = path[len(prefix):] or "/"
-            request.scope["path"] = new_path
-            break
+    # Check if Vercel provided original path in headers
+    matched_path = request.headers.get("x-matched-path")
+    forwarded_uri = request.headers.get("x-forwarded-uri")
+    
+    orig = matched_path or forwarded_uri
+    if orig and not orig.startswith("/api/index.py"):
+        request.scope["path"] = orig.split("?")[0]
+    else:
+        path = request.scope.get("path", "")
+        for prefix in ["/main.py", "/api/index.py", "/index.py"]:
+            if path == prefix:
+                request.scope["path"] = "/"
+                break
+            elif path.startswith(prefix + "/"):
+                request.scope["path"] = path[len(prefix):]
+                break
     return await call_next(request)
 
 # Initialize database tables
@@ -151,6 +161,7 @@ def home():
     return {"status": "running", "service": "SoulTalk AI Backend API"}
 
 @app.post("/api/auth/register")
+@app.post("/auth/register")
 def register(req: RegisterRequest):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -175,6 +186,7 @@ def register(req: RegisterRequest):
     return {"token": token, "name": req.name, "email": req.email}
 
 @app.post("/api/auth/login")
+@app.post("/auth/login")
 def login(req: LoginRequest):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -199,6 +211,7 @@ def login(req: LoginRequest):
     return response_data
 
 @app.get("/api/user/profile")
+@app.get("/user/profile")
 def get_profile(current_user: dict = Depends(get_current_user)):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -218,6 +231,7 @@ def get_profile(current_user: dict = Depends(get_current_user)):
     }
 
 @app.post("/api/user/profile")
+@app.post("/user/profile")
 def update_profile(req: ProfileUpdateRequest, current_user: dict = Depends(get_current_user)):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -231,6 +245,7 @@ def update_profile(req: ProfileUpdateRequest, current_user: dict = Depends(get_c
     return {"status": "success", "message": "Profil berhasil diperbarui"}
 
 @app.get("/api/sessions")
+@app.get("/sessions")
 def get_sessions(current_user: dict = Depends(get_current_user)):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -264,6 +279,7 @@ def get_sessions(current_user: dict = Depends(get_current_user)):
     return sessions
 
 @app.post("/api/sessions")
+@app.post("/sessions")
 def save_session(req: SessionSaveRequest, current_user: dict = Depends(get_current_user)):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -288,6 +304,7 @@ def save_session(req: SessionSaveRequest, current_user: dict = Depends(get_curre
     return {"status": "success", "message": "Sesi berhasil disimpan"}
 
 @app.delete("/api/sessions")
+@app.delete("/sessions")
 def delete_sessions(current_user: dict = Depends(get_current_user)):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -297,6 +314,7 @@ def delete_sessions(current_user: dict = Depends(get_current_user)):
     return {"status": "success", "message": "Semua riwayat sesi berhasil dihapus"}
 
 @app.delete("/api/user/account")
+@app.delete("/user/account")
 def delete_account(current_user: dict = Depends(get_current_user)):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -331,6 +349,7 @@ def auto_extract_memory(user_id: int, user_message: str):
         print("Failed to auto extract memory:", e)
 
 @app.post("/api/chat")
+@app.post("/chat")
 async def chat_ai(req: ChatRequest, background_tasks: BackgroundTasks, current_user: dict = Depends(get_current_user)):
     # Check and consume quota first
     check_and_update_quota(current_user['id'])
@@ -483,6 +502,7 @@ async def chat_ai(req: ChatRequest, background_tasks: BackgroundTasks, current_u
     return {"reply": reply, "provider": "Local Fallback"}
 
 @app.get("/api/user/memory")
+@app.get("/user/memory")
 def get_memory(current_user: dict = Depends(get_current_user)):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -498,6 +518,7 @@ def get_memory(current_user: dict = Depends(get_current_user)):
     return {"enabled": enabled, "memories": memories}
 
 @app.post("/api/user/memory/toggle")
+@app.post("/user/memory/toggle")
 def toggle_memory(req: MemoryToggleRequest, current_user: dict = Depends(get_current_user)):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -507,6 +528,7 @@ def toggle_memory(req: MemoryToggleRequest, current_user: dict = Depends(get_cur
     return {"status": "success", "message": "Pengaturan memori berhasil diperbarui"}
 
 @app.post("/api/user/memory")
+@app.post("/user/memory")
 def add_memory(req: MemoryAddRequest, current_user: dict = Depends(get_current_user)):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -516,6 +538,7 @@ def add_memory(req: MemoryAddRequest, current_user: dict = Depends(get_current_u
     return {"status": "success", "message": "Memori baru berhasil disimpan"}
 
 @app.delete("/api/user/memory/{memory_id}")
+@app.delete("/user/memory/{memory_id}")
 def delete_memory(memory_id: int, current_user: dict = Depends(get_current_user)):
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -525,6 +548,7 @@ def delete_memory(memory_id: int, current_user: dict = Depends(get_current_user)
     return {"status": "success", "message": "Memori berhasil dihapus"}
 
 @app.delete("/api/user/memory")
+@app.delete("/user/memory")
 def clear_memories(current_user: dict = Depends(get_current_user)):
     conn = get_db_connection()
     cursor = conn.cursor()

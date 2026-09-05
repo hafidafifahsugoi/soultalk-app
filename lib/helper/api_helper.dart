@@ -3,17 +3,15 @@ import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiHelper {
-  static String _resolvedBaseUrl = 'http://192.168.1.9:8000';
+  static String _resolvedBaseUrl = 'https://soultalk-app-sigma.vercel.app';
 
   static String get baseUrl => _resolvedBaseUrl;
 
   static Future<void> initialize() async {
     await loadToken();
 
-    if (kIsWeb) {
-      _resolvedBaseUrl = 'http://localhost:8000';
-      return;
-    }
+    // Default to the online cloud server
+    _resolvedBaseUrl = 'https://soultalk-app-sigma.vercel.app';
 
     // Check if user previously saved a custom server URL
     try {
@@ -26,23 +24,26 @@ class ApiHelper {
       }
     } catch (_) {}
 
-    // Candidates to test for the local server
+    if (kIsWeb) {
+      return;
+    }
+
+    // Candidates to test for the server
     final candidates = [
-      'http://192.168.1.9:8000', // PC Wi-Fi IP
-      'http://localhost:8000',   // Works if using USB adb reverse
-      'http://127.0.0.1:8000',
-      'http://10.0.2.2:8000',    // Android Emulator
-      'http://192.168.1.5:8000',
+      'https://soultalk-app-sigma.vercel.app', // Vercel Cloud Server (Online 24/7)
+      'http://192.168.1.9:8000',               // PC Wi-Fi IP
+      'http://localhost:8000',                 // Works if using USB adb reverse
+      'http://10.0.2.2:8000',                  // Android Emulator
     ];
 
     for (final candidate in candidates) {
       try {
         final client = HttpClient();
-        client.connectionTimeout = const Duration(milliseconds: 1200);
+        client.connectionTimeout = const Duration(milliseconds: 1500);
         final uri = Uri.parse(candidate);
         final request = await client.getUrl(uri);
         final response = await request.close();
-        if (response.statusCode >= 200) {
+        if (response.statusCode >= 200 && response.statusCode < 400) {
           _resolvedBaseUrl = candidate;
           debugPrint('SoulTalk AI Server connected successfully to: $candidate');
           return;
@@ -91,7 +92,7 @@ class ApiHelper {
       final uri = Uri.parse(formatted);
       final request = await client.getUrl(uri);
       final response = await request.close();
-      return response.statusCode >= 200;
+      return response.statusCode >= 200 && response.statusCode < 400;
     } catch (_) {
       return false;
     }

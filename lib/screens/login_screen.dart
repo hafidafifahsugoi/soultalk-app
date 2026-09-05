@@ -156,39 +156,32 @@ class _LoginScreenState extends State<LoginScreen> {
                     ),
                   ),
                   const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
+                  Row(
                     children: [
-                      ActionChip(
-                        avatar: const Icon(Icons.wifi, size: 14),
-                        label: const Text('Wi-Fi PC (192.168.1.9:8000)'),
-                        onPressed: () {
-                          setModalState(() {
-                            controller.text = 'http://192.168.1.9:8000';
-                            testResult = null;
-                          });
-                        },
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          icon: const Icon(Icons.cloud_outlined, size: 16),
+                          label: const Text('Cloud Vercel', style: TextStyle(fontSize: 12)),
+                          onPressed: () {
+                            setModalState(() {
+                              controller.text = 'https://soultalk-app-sigma.vercel.app';
+                              testResult = null;
+                            });
+                          },
+                        ),
                       ),
-                      ActionChip(
-                        avatar: const Icon(Icons.usb, size: 14),
-                        label: const Text('USB adb reverse (localhost:8000)'),
-                        onPressed: () {
-                          setModalState(() {
-                            controller.text = 'http://localhost:8000';
-                            testResult = null;
-                          });
-                        },
-                      ),
-                      ActionChip(
-                        avatar: const Icon(Icons.phone_android, size: 14),
-                        label: const Text('Emulator (10.0.2.2:8000)'),
-                        onPressed: () {
-                          setModalState(() {
-                            controller.text = 'http://10.0.2.2:8000';
-                            testResult = null;
-                          });
-                        },
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          icon: const Icon(Icons.laptop_chromebook, size: 16),
+                          label: const Text('Laptop Lokal', style: TextStyle(fontSize: 12)),
+                          onPressed: () {
+                            setModalState(() {
+                              controller.text = 'http://192.168.1.9:8000';
+                              testResult = null;
+                            });
+                          },
+                        ),
                       ),
                     ],
                   ),
@@ -297,15 +290,18 @@ class _LoginScreenState extends State<LoginScreen> {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              // Logo icon
-              Container(
-                width: 64,
-                height: 64,
-                decoration: BoxDecoration(
-                  borderRadius: BorderRadius.circular(18),
-                  color: AppColors.primary.withValues(alpha: 0.10),
+              // Logo icon (Long press for server settings)
+              GestureDetector(
+                onLongPress: _showServerConfigDialog,
+                child: Container(
+                  width: 64,
+                  height: 64,
+                  decoration: BoxDecoration(
+                    borderRadius: BorderRadius.circular(18),
+                    color: AppColors.primary.withValues(alpha: 0.10),
+                  ),
+                  child: const Center(child: AppLogo(size: 36)),
                 ),
-                child: const Center(child: AppLogo(size: 36)),
               ),
               const SizedBox(height: 24),
               Text('Selamat Datang',
@@ -395,21 +391,6 @@ class _LoginScreenState extends State<LoginScreen> {
                               fontWeight: FontWeight.w700),
                         ),
                       ],
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 24),
-              Center(
-                child: TextButton.icon(
-                  onPressed: _showServerConfigDialog,
-                  icon: const Icon(Icons.dns_outlined, size: 15, color: AppColors.mutedForeground),
-                  label: Text(
-                    'Server: ${ApiHelper.baseUrl}',
-                    style: const TextStyle(
-                      fontSize: 12,
-                      color: AppColors.mutedForeground,
-                      decoration: TextDecoration.underline,
                     ),
                   ),
                 ),

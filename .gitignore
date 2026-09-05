@@ -52,4 +52,6 @@ backend/*.db
 **/__pycache__/
 *.py[cod]
 *$py.class
+cloudflared.exe
+
 
