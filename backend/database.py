@@ -1,7 +1,10 @@
 import sqlite3
 import os
 
-DB_FILE = os.path.join(os.path.dirname(__file__), "soultalk_server.db")
+if os.environ.get("VERCEL"):
+    DB_FILE = "/tmp/soultalk_server.db"
+else:
+    DB_FILE = os.path.join(os.path.dirname(__file__), "soultalk_server.db")
 
 def get_db_connection():
     conn = sqlite3.connect(DB_FILE)
