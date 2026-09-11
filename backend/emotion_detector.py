@@ -109,30 +109,30 @@ def detect_emotion_from_bytes(image_bytes: bytes) -> dict:
             "eye_blink": round(float(eye_blink), 3),
         }
 
-        # Klasifikasi Emosi (Mendeteksi Senang, Sedih/Manyun/Murung, Cemas, Lelah, Biasa)
-        if smile > 0.26:
+        # Klasifikasi Emosi (Sensitif terhadap wajah tidak senyum / manyun / murung)
+        if smile > 0.22:
             emotion = "Senang"
             emoji = "😊"
             confidence = min(1.0, round(float(smile * 1.6), 2))
         elif (
-            frown > 0.14
-            or (pucker > 0.20 and smile < 0.15)
-            or (shrug_lower > 0.20 and smile < 0.15)
-            or (brow_inner_up > 0.20 and smile < 0.18)
-            or (brow_down > 0.28 and smile < 0.12)
-            or (smile < 0.06 and (frown > 0.08 or pucker > 0.16 or brow_down > 0.20))
+            frown > 0.04
+            or pucker > 0.05
+            or shrug_lower > 0.05
+            or brow_inner_up > 0.08
+            or brow_down > 0.10
+            or smile < 0.12  # Wajah datar / tidak senyum / manyun
         ):
             emotion = "Sedih"
             emoji = "😢"
-            confidence = min(1.0, round(float(max(frown * 1.6, pucker * 1.4, brow_inner_up * 1.3, brow_down * 1.2, 0.75)), 2))
-        elif brow_down > 0.35 and eye_wide > 0.25:
+            confidence = min(1.0, round(float(max(frown * 2.0, pucker * 2.0, 0.85)), 2))
+        elif brow_down > 0.25 and eye_wide > 0.18:
             emotion = "Cemas"
             emoji = "😰"
-            confidence = min(1.0, round(float(max(brow_down, eye_wide)), 2))
-        elif eye_blink > 0.70 and brow_down > 0.18:
+            confidence = 0.80
+        elif eye_blink > 0.60:
             emotion = "Lelah"
             emoji = "😔"
-            confidence = min(1.0, round(float(eye_blink), 2))
+            confidence = 0.80
         else:
             emotion = "Biasa"
             emoji = "🙂"

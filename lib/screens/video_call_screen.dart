@@ -167,9 +167,26 @@ class _VideoCallScreenState extends State<VideoCallScreen>
       duration: const Duration(milliseconds: 600),
     )..forward();
 
-    // Timer durasi panggilan
+    // Timer durasi panggilan & inisiatif sapaan proaktif saat hening/diam
     _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (mounted) setState(() => _seconds++);
+      if (mounted) {
+        setState(() => _seconds++);
+
+        // Jika pengguna terdiam / hening lebih dari 12 detik di sesi, AI proaktif menyapa dan bertanya
+        if (_seconds >= 10 && _seconds % 12 == 0 && _statusIndex == 0 && !_showTextInput) {
+          final now = DateTime.now();
+          if (_lastProactiveRemarkTime == null || now.difference(_lastProactiveRemarkTime!).inSeconds >= 18) {
+            _lastProactiveRemarkTime = now;
+            _totalSadFrames++; // Catat sebagai emosi termenung/murung
+            final silenceRemarks = [
+              'Kak, aku perhatikan dari tadi kamu banyak terdiam dan raut wajahmu kelihatan agak murung... Kamu baik-baik aja? Ada yang lagi mengganjal di pikiranmu?',
+              'Tatap matamu kelihatan menyimpan sesuatu ya... Nggak apa-apa, tumpahin aja kalau mau cerita. Aku di sini setia mendengarkanmu.',
+              'Kamu kelihatan lagi banyak beban pikiran ya... Mau cerita pelan-pelan ke aku apa yang sedang kamu rasakan?',
+            ];
+            _triggerAiProactiveSpeech((silenceRemarks..shuffle()).first);
+          }
+        }
+      }
     });
 
     // AI starts in Mendengarkan state
