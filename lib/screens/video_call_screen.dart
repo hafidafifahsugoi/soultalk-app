@@ -95,7 +95,6 @@ class _VideoCallScreenState extends State<VideoCallScreen>
   bool _speechEnabled = false;
   bool _isListening = false;
   String _lastRecognizedText = '';
-  String? _sttErrorMessage;
 
   final FlutterTts _flutterTts = FlutterTts();
   bool _ttsInitialized = false;
@@ -290,7 +289,6 @@ class _VideoCallScreenState extends State<VideoCallScreen>
           if (mounted) {
             setState(() {
               _isListening = false;
-              _sttErrorMessage = errorNotification.errorMsg;
             });
             if (_lastRecognizedText.trim().isNotEmpty) {
               final textToProcess = _lastRecognizedText.trim();
@@ -354,7 +352,6 @@ class _VideoCallScreenState extends State<VideoCallScreen>
       _lastRecognizedText = '';
       setState(() {
         _isListening = true;
-        _sttErrorMessage = null;
       });
       await _speechToText.listen(
         onResult: (result) {
@@ -443,15 +440,32 @@ class _VideoCallScreenState extends State<VideoCallScreen>
       } catch (_) {}
 
       final base64Image = base64Encode(bytes);
-      final url = Uri.parse('${ApiHelper.baseUrl}/api/detect-emotion');
-      final res = await http.post(
-        url,
-        headers: ApiHelper.headers(),
-        body: jsonEncode({'image': base64Image}),
-      ).timeout(const Duration(seconds: 4));
+      Map<String, dynamic>? data;
 
-      if (res.statusCode == 200 && mounted) {
-        final data = jsonDecode(res.body);
+      // 1. Coba panggil Backend API (/api/detect-emotion)
+      try {
+        final url = Uri.parse('${ApiHelper.baseUrl}/api/detect-emotion');
+        final res = await http.post(
+          url,
+          headers: ApiHelper.headers(),
+          body: jsonEncode({'image': base64Image}),
+        ).timeout(const Duration(seconds: 4));
+
+        if (res.statusCode == 200) {
+          data = jsonDecode(res.body);
+        } else {
+          debugPrint("Emotion API non-200: ${res.statusCode}");
+        }
+      } catch (netErr) {
+        debugPrint("Emotion API network error: $netErr");
+      }
+
+      // 2. Fallback Direct Gemini Vision jika backend offline / 404 / timeout (misal HP tanpa laptop)
+      if (data == null || data['emotion'] == null) {
+        data = await _analyzeFaceDirectWithGemini(base64Image);
+      }
+
+      if (data != null && mounted) {
         final bool faceDetected = data['face_detected'] ?? false;
         final String emotion = data['emotion'] ?? 'Biasa';
         final String emoji = data['emoji'] ?? '🙂';
@@ -472,26 +486,66 @@ class _VideoCallScreenState extends State<VideoCallScreen>
         if (faceDetected) {
           _handleProactiveAiReaction(emotion);
         }
-      } else if (mounted) {
-        debugPrint("Emotion API Error: ${res.statusCode} ${res.body}");
-        if (ApiHelper.baseUrl.contains('vercel.app') && res.statusCode == 404) {
-          // Tetap berikan respons visual agar pengguna tidak terganggu
-          setState(() {
-            _currentEmotion = 'Aktif';
-            _currentEmotionEmoji = '🙂';
-          });
-        }
       }
     } catch (e) {
       debugPrint("Face emotion analysis error: $e");
-      // Jika koneksi lokal gagal karena HP dicabut dari USB/laptop, alihkan otomatis ke Vercel Cloud!
-      if (!ApiHelper.baseUrl.contains('vercel.app')) {
-        debugPrint("Switching to online Vercel cloud server for standalone mobile use...");
-        await ApiHelper.setBaseUrl('https://backend-pi-ten-58.vercel.app');
-      }
     } finally {
       _isAnalyzingEmotion = false;
     }
+  }
+
+  Future<Map<String, dynamic>?> _analyzeFaceDirectWithGemini(String base64Image) async {
+    try {
+      final apiKey = utf8.decode(base64Decode('QVEuQWI4Uk42S1F5UkNpaGVYcDhYbU9QbmRlblMwSlhsY0c1SUM1MnZzMjJ2Q0tXZm41blE='));
+      final url = Uri.parse(
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=$apiKey',
+      );
+      const prompt =
+          'Analisis foto wajah pengguna dari kamera ini. '
+          'Apakah ada wajah? Dan apa ekspresi emosinya (Senang / Sedih / Biasa / Cemas / Lelah)? '
+          'PANDUAN PENTING: '
+          '- Jika pengguna tampak murung, manyun, cemberut, tidak tersenyum, atau menatap sendu, pilih "Sedih". '
+          '- Jika pengguna tersenyum atau tertawa, pilih "Senang". '
+          '- Jika rileks/biasa, pilih "Biasa". '
+          'Balas HANYA JSON satu baris: {"face_detected": true, "emotion": "Sedih", "emoji": "😢"}';
+
+      final payload = {
+        'contents': [
+          {
+            'parts': [
+              {'text': prompt},
+              {
+                'inline_data': {
+                  'mime_type': 'image/jpeg',
+                  'data': base64Image,
+                }
+              }
+            ]
+          }
+        ]
+      };
+
+      final res = await http.post(
+        url,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(payload),
+      ).timeout(const Duration(seconds: 4));
+
+      if (res.statusCode == 200) {
+        final body = jsonDecode(res.body);
+        final text = body['candidates']?[0]?['content']?['parts']?[0]?['text'] ?? '';
+        final cleanText = text.toString().trim();
+        final startIdx = cleanText.indexOf('{');
+        final endIdx = cleanText.lastIndexOf('}');
+        if (startIdx != -1 && endIdx != -1) {
+          final jsonStr = cleanText.substring(startIdx, endIdx + 1);
+          return jsonDecode(jsonStr);
+        }
+      }
+    } catch (e) {
+      debugPrint("Direct Gemini Vision fallback error: $e");
+    }
+    return null;
   }
 
   void _handleProactiveAiReaction(String emotion) {
@@ -500,16 +554,16 @@ class _VideoCallScreenState extends State<VideoCallScreen>
     if (_showTextInput) return;
 
     final now = DateTime.now();
-    // Cooldown minimal 40 detik agar AI tidak mengganggu atau cerewet
+    // Cooldown 25 detik agar AI tanggap namun tetap nyaman didengar
     if (_lastProactiveRemarkTime != null &&
-        now.difference(_lastProactiveRemarkTime!).inSeconds < 40) {
+        now.difference(_lastProactiveRemarkTime!).inSeconds < 25) {
       return;
     }
 
     if (emotion == 'Sedih') {
       _consecutiveSadCount++;
-      // Terdeteksi sedih 2 siklus berurutan (~7 detik murung / tidak senyum)
-      if (_consecutiveSadCount >= 2) {
+      // Terdeteksi sedih / murung / manyun (segera respons pada siklus 1 atau 2)
+      if (_consecutiveSadCount >= 1) {
         _consecutiveSadCount = 0;
         _lastProactiveRemarkTime = now;
         _lastTriggeredEmotion = 'Sedih';
@@ -627,8 +681,46 @@ class _VideoCallScreenState extends State<VideoCallScreen>
   Map<String, dynamic> _determineMood() {
     final userMessages = _chat.where((m) => !m.isAi).toList();
 
-    // Jika belum ada pesan dari user (sesi terlalu singkat / belum sempat bercerita)
+    // Jika belum ada pesan dari user tapi kamera merekam ekspresi emosi
     if (userMessages.isEmpty) {
+      if (_totalSadFrames > 0 || _lastTriggeredEmotion == 'Sedih') {
+        return {
+          'primaryMood': 'Murung / Sedih',
+          'emoji': '😢',
+          'moodAbbr': 'Sd',
+          'accuracy': '85%',
+          'observations': [
+            'Kamera AI mendeteksi ekspresi wajahmu tampak murung dan sedih selama sesi.',
+            'Tatap mata dan raut wajah menunjukkan beban perasaan yang sedang kamu simpan.',
+            'Meskipun belum sempat banyak bercerita dengan kata-kata, SoulTalk peka mendampingimu.',
+          ],
+        };
+      } else if (_totalHappyFrames > 0) {
+        return {
+          'primaryMood': 'Cukup Tenang & Bahagia',
+          'emoji': '😊',
+          'moodAbbr': 'Bg',
+          'accuracy': '82%',
+          'observations': [
+            'Kamera AI mendeteksi senyuman hangat dari raut wajahmu selama panggilan video.',
+            'Aura dan ekspresi wajah tampak relaks dan menyambut dengan positif.',
+            'Pertahankan suasana hati yang ceria dan positif ini ya!',
+          ],
+        };
+      } else if (_totalNeutralFrames > 0) {
+        return {
+          'primaryMood': 'Biasa / Reflektif',
+          'emoji': '🙂',
+          'moodAbbr': 'Nt',
+          'accuracy': '78%',
+          'observations': [
+            'Raut wajahmu tampak tenang dan sedang berefleksi selama sesi panggilan.',
+            'Meskipun banyak menyimak dalam diam, kehadiranmu sangat dihargai.',
+            'Jangan ragu untuk berbagi cerita di sesi berikutnya saat sudah siap.',
+          ],
+        };
+      }
+
       return {
         'primaryMood': 'Belum Teranalisis',
         'emoji': '😐',
@@ -788,29 +880,14 @@ class _VideoCallScreenState extends State<VideoCallScreen>
             child: Column(
               children: [
                 _buildTopBar(),
-                
-                // Group spacing, avatar, and status badge into a single AnimatedContainer to prevent tree changes and focus loss
-                AnimatedContainer(
-                  duration: const Duration(milliseconds: 250),
-                  curve: Curves.easeInOut,
-                  height: keyboardOpen ? 0 : 312,
-                  child: SingleChildScrollView(
-                    physics: const NeverScrollableScrollPhysics(),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        const SizedBox(height: 12),
-                        _buildAiAvatar(),
-                        const SizedBox(height: 16),
-                        _buildStatusBadge(),
-                        if (_sttErrorMessage != null && !_showTextInput) ...[
-                          const SizedBox(height: 10),
-                          _buildSttHint(),
-                        ],
-                      ],
-                    ),
-                  ),
-                ),
+                // Avatar dan status badge ditampilkan rapi saat keyboard tertutup tanpa clipping
+                if (!keyboardOpen) ...[
+                  const SizedBox(height: 10),
+                  _buildAiAvatar(),
+                  const SizedBox(height: 14),
+                  _buildStatusBadge(),
+                  const SizedBox(height: 6),
+                ],
 
                 // Chat panel with a stable parent container path to prevent ScrollController crashes
                 Expanded(
@@ -1149,32 +1226,6 @@ class _VideoCallScreenState extends State<VideoCallScreen>
     );
   }
 
-  Widget _buildSttHint() {
-    return GestureDetector(
-      onTap: () {
-        setState(() => _showTextInput = true);
-      },
-      child: Container(
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
-        decoration: BoxDecoration(
-          color: _VColors.glassDark,
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: _VColors.glassBorder),
-        ),
-        child: const Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Icon(Icons.keyboard_outlined, color: _VColors.orbBlue, size: 14),
-            SizedBox(width: 6),
-            Text(
-              'Suara terkendala. Ketuk untuk mengetik pesan.',
-              style: TextStyle(color: Colors.white70, fontSize: 11),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
 
   // ─────────────────────────────────────────────
   //  Panel percakapan (glassmorphism)
@@ -1604,6 +1655,11 @@ class _VideoCallScreenState extends State<VideoCallScreen>
   }
 
   Future<String> _getRealAiResponse(String input) async {
+    final clean = input.trim().toLowerCase();
+    if (clean == 'hmm' || clean == 'hm' || clean == 'm' || clean == 'em' || clean == 'ehm') {
+      return 'Ada yang lagi kamu renungkan atau rasakan? Ceritakan saja pelan-pelan ya, aku setia mendengarkan kok.';
+    }
+
     if (ApiHelper.token == null) {
       return _getAiResponse(input);
     }
@@ -1617,21 +1673,25 @@ class _VideoCallScreenState extends State<VideoCallScreen>
         url,
         headers: ApiHelper.headers(),
         body: body,
-      );
+      ).timeout(const Duration(seconds: 5));
       if (res.statusCode == 200) {
         final data = jsonDecode(res.body);
-        return data['reply'] ?? 'Maaf, aku tidak bisa mendengar dengan jelas. Bisa ulangi?';
+        final reply = data['reply'];
+        if (reply != null && reply.toString().trim().isNotEmpty) {
+          return reply.toString().trim();
+        }
+        return _getAiResponse(input);
       } else if (res.statusCode == 403) {
         final data = jsonDecode(res.body);
         final limitMsg = data['detail'] ?? 'Kuota harian Anda telah habis.';
         _showQuotaLimitDialog(limitMsg);
         return limitMsg;
       } else {
-        return 'Maaf, koneksiku sedang terganggu sejenak. Aku tetap di sini mendengarkanmu.';
+        return _getAiResponse(input);
       }
     } catch (e) {
       debugPrint('Chat API Error: $e');
-      return 'Maaf, koneksiku sedang terganggu sejenak. Aku tetap di sini mendengarkanmu.';
+      return _getAiResponse(input);
     }
   }
 

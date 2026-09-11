@@ -59,13 +59,8 @@ class ApiHelper {
       }
     }
 
-    // Default fallback based on platform if no candidates responded
-    if (Platform.isAndroid) {
-      // Prioritize PC Wi-Fi IP for real devices
-      _resolvedBaseUrl = 'http://192.168.1.9:8000';
-    } else {
-      _resolvedBaseUrl = 'http://localhost:8000';
-    }
+    // Default fallback: Always use the live Vercel Cloud Server so app works standalone anywhere (e.g. with doctor / on mobile data)
+    _resolvedBaseUrl = 'https://backend-pi-ten-58.vercel.app';
     debugPrint('SoulTalk AI Server using fallback: $_resolvedBaseUrl');
   }
 
