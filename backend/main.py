@@ -27,6 +27,9 @@ def _get_gemini_key():
     except Exception:
         return ""
 
+def _get_groq_key():
+    return os.environ.get("GROQ_API_KEY")
+
 try:
     from emotion_detector import detect_emotion_from_base64
 except Exception as _err:
@@ -535,8 +538,8 @@ async def chat_ai(req: ChatRequest, background_tasks: BackgroundTasks, current_u
         except Exception as e:
             print("Gemini API failed:", e)
             
-    # Route 2: Groq API (Llama 3)
-    groq_key = os.environ.get("GROQ_API_KEY")
+    # Route 2: Groq API (High Speed LLM)
+    groq_key = _get_groq_key()
     if groq_key:
         try:
             headers = {
@@ -544,7 +547,7 @@ async def chat_ai(req: ChatRequest, background_tasks: BackgroundTasks, current_u
                 "Content-Type": "application/json"
             }
             payload = {
-                "model": "llama-3.3-70b-specdec",
+                "model": "qwen/qwen3.8-27b",
                 "messages": [
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": input_text}
