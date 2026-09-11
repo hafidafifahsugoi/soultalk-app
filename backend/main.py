@@ -16,6 +16,49 @@ import google.generativeai as genai
 from database import get_db_connection, init_db
 import auth
 
+try:
+    from emotion_detector import detect_emotion_from_base64
+except Exception as _err:
+    print("Warning: emotion_detector local tidak tersedia, mengaktifkan Gemini Vision cloud fallback:", _err)
+    def detect_emotion_from_base64(b64_string: str):
+        gemini_key = os.environ.get("GEMINI_API_KEY")
+        if gemini_key:
+            try:
+                if "," in b64_string:
+                    b64_string = b64_string.split(",", 1)[1]
+                import base64
+                raw_bytes = base64.b64decode(b64_string)
+                genai.configure(api_key=gemini_key)
+                m = genai.GenerativeModel('gemini-3.6-flash')
+                prompt = (
+                    "Analisis foto wajah pengguna ini. "
+                    "Apakah ada wajah? Dan apa ekspresi emosi dominannya (Senang / Sedih / Biasa / Cemas / Lelah)? "
+                    "Jika dia tampak murung, manyun, cemberut, atau tidak tersenyum, pilih 'Sedih'. "
+                    "Jika dia tersenyum, pilih 'Senang'. "
+                    "Balas HANYA JSON satu baris: "
+                    '{"face_detected": true, "emotion": "Senang", "emoji": "😊"}'
+                )
+                res = m.generate_content([
+                    prompt,
+                    {'mime_type': 'image/jpeg', 'data': raw_bytes}
+                ])
+                text = res.text.strip()
+                if "{" in text and "}" in text:
+                    text = text[text.find("{"):text.rfind("}")+1]
+                    data = json.loads(text)
+                    data["confidence"] = 0.90
+                    return data
+            except Exception as e:
+                print("Gemini Vision cloud emotion error:", e)
+
+        return {
+            "face_detected": True,
+            "emotion": "Biasa",
+            "emoji": "🙂",
+            "confidence": 0.5,
+            "message": "Deteksi awan mode cadangan"
+        }
+
 app = FastAPI(title="SoulTalk AI Backend Server", redirect_slashes=False)
 
 # Enable CORS for local testing from Flutter
@@ -102,6 +145,10 @@ class SessionSaveRequest(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str
+    current_emotion: str = ""
+
+class EmotionDetectionRequest(BaseModel):
+    image: str
 
 class MemoryToggleRequest(BaseModel):
     enabled: bool
@@ -358,7 +405,7 @@ def auto_extract_memory(user_id: int, user_message: str):
             "Jika tidak ada fakta pribadi atau informasi penting yang layak diingat jangka panjang, balas hanya dengan satu kata: NONE."
         )
         genai.configure(api_key=gemini_key)
-        model = genai.GenerativeModel('gemini-1.5-flash')
+        model = genai.GenerativeModel('gemini-3.6-flash')
         response = model.generate_content(prompt)
         text = response.text.strip() if response.text else "NONE"
         if text and text != "NONE" and "NONE" not in text:
@@ -444,6 +491,16 @@ async def chat_ai(req: ChatRequest, background_tasks: BackgroundTasks, current_u
         "7. KELOLA MEMORI: Gunakan data memori masa lalu (jika ada) untuk menanyakan kabar terbaru atau perkembangan cerita mereka sebelumnya secara natural."
     )
     
+    if req.current_emotion and req.current_emotion not in ["Tidak Terdeteksi", "Error", ""]:
+        system_prompt += (
+            f"\n\n[INFORMASI VISUAL DARI KAMERA PENGGUNA]\n"
+            f"Ekspresi wajah pengguna saat ini terdeteksi sedang: {req.current_emotion.upper()}.\n"
+            "Panduan interaksi berdasarkan ekspresi:\n"
+            "- Jika Sedih/Murung/Lelah: Berikan respons yang lebih hangat, lembut, dan peka. Tanyakan dengan perhatian lembut bagaimana keadaannya atau apa yang sedang membebaninya.\n"
+            "- Jika Senang/Tersenyum: Tanggapi dengan aura ceria dan positif, ikut senang melihatnya tersenyum.\n"
+            "- Jika Cemas/Tegang: Berikan kalimat yang menenangkan dan perlahan."
+        )
+
     if memories_str:
         system_prompt += f"\n\nBerikut adalah beberapa hal penting yang kamu ingat tentang pengguna dari percakapan masa lalu (Gunakan informasi ini agar percakapan terasa lebih personal jika relevan):\n- {memories_str}"
     
@@ -453,7 +510,7 @@ async def chat_ai(req: ChatRequest, background_tasks: BackgroundTasks, current_u
         try:
             genai.configure(api_key=gemini_key)
             model = genai.GenerativeModel(
-                model_name='gemini-1.5-flash',  # Menggunakan versi stabil standar
+                model_name='gemini-3.6-flash',
                 system_instruction=system_prompt
             )
             response = model.generate_content(input_text)
@@ -580,3 +637,17 @@ def clear_memories(current_user: dict = Depends(get_current_user)):
     conn.commit()
     conn.close()
     return {"status": "success", "message": "Semua memori berhasil dihapus"}
+
+@app.post("/api/detect-emotion")
+@app.post("/detect-emotion")
+def detect_emotion(req: EmotionDetectionRequest):
+    """
+    Mendeteksi emosi wajah dari frame kamera yang dikirim oleh Flutter.
+    Payload: {"image": "<base64_string>"}
+    """
+    if not req.image or len(req.image.strip()) == 0:
+        raise HTTPException(status_code=400, detail="Gambar tidak boleh kosong")
+    
+    result = detect_emotion_from_base64(req.image)
+    return result
+

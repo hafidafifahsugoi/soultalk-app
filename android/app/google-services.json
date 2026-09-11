@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "927314681728",
+    "project_id": "soultalk-ai-1c8cd",
+    "storage_bucket": "soultalk-ai-1c8cd.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:927314681728:android:3536588bb0133e6d442b65",
+        "android_client_info": {
+          "package_name": "com.soultalk.soultalk_ai"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyB3E9AOApYpeptCsI4QduVc0AEOeIOWpEA"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

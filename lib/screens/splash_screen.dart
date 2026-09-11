@@ -1,7 +1,12 @@
 import 'package:flutter/material.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:provider/provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_logo.dart';
+import '../providers/profile_provider.dart';
+import '../providers/session_provider.dart';
 import 'login_screen.dart';
+import 'main_shell.dart';
 
 class SplashScreen extends StatefulWidget {
   const SplashScreen({super.key});
@@ -29,16 +34,32 @@ class _SplashScreenState extends State<SplashScreen>
       end: Offset.zero,
     ).animate(CurvedAnimation(parent: _controller, curve: Curves.easeOutCubic));
 
-    Future.delayed(const Duration(milliseconds: 2800), () {
+    Future.delayed(const Duration(milliseconds: 2400), () async {
       if (!mounted) return;
-      Navigator.of(context).pushReplacement(
-        PageRouteBuilder(
-          transitionDuration: const Duration(milliseconds: 500),
-          pageBuilder: (_, __, ___) => const LoginScreen(),
-          transitionsBuilder: (_, animation, __, child) =>
-              FadeTransition(opacity: animation, child: child),
-        ),
-      );
+
+      final user = FirebaseAuth.instance.currentUser;
+      Widget targetScreen;
+
+      if (user != null) {
+        // Pengguna sudah login, sinkronisasi data dari Firestore
+        context.read<ProfileProvider>().fetchProfileFromFirestore();
+        context.read<SessionProvider>().fetchSessionsFromFirestore();
+        context.read<SessionProvider>().loadMoodHistoryFromFirestore();
+        targetScreen = const MainShell();
+      } else {
+        targetScreen = const LoginScreen();
+      }
+
+      if (mounted) {
+        Navigator.of(context).pushReplacement(
+          PageRouteBuilder(
+            transitionDuration: const Duration(milliseconds: 500),
+            pageBuilder: (_, __, ___) => targetScreen,
+            transitionsBuilder: (_, animation, __, child) =>
+                FadeTransition(opacity: animation, child: child),
+          ),
+        );
+      }
     });
   }
 

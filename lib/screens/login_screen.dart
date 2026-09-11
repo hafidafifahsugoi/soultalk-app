@@ -1,11 +1,12 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_logo.dart';
 import '../helper/api_helper.dart';
 import '../providers/profile_provider.dart';
+import '../providers/session_provider.dart';
+import '../services/auth_service.dart';
+import '../services/firestore_service.dart';
 import 'main_shell.dart';
 import 'register_screen.dart';
 
@@ -37,6 +38,11 @@ class _LoginScreenState extends State<LoginScreen> {
       _showSnackbar('Email wajib diisi');
       return;
     }
+    final emailRegex = RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
+    if (!emailRegex.hasMatch(email)) {
+      _showSnackbar('Format email tidak valid (tidak boleh ada spasi atau karakter asing)');
+      return;
+    }
     if (password.isEmpty) {
       _showSnackbar('Kata sandi wajib diisi');
       return;
@@ -45,32 +51,34 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => _loading = true);
 
     try {
-      final url = Uri.parse('${ApiHelper.baseUrl}/api/auth/login');
-      final body = jsonEncode({
-        'email': email,
-        'password': password,
-      });
+      // Autentikasi dengan Firebase Auth
+      final credential = await AuthService().signInWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
 
-      final res = await http.post(
-        url,
-        headers: {'Content-Type': 'application/json'},
-        body: body,
-      ).timeout(const Duration(seconds: 7));
-
-      setState(() => _loading = false);
-
-      if (res.statusCode == 200) {
-        final data = jsonDecode(res.body);
-        final token = data['token'] as String;
-        await ApiHelper.saveToken(token);
+      final user = credential.user;
+      if (user != null && mounted) {
+        final profileData = await FirestoreService().getUserProfile(user.uid);
 
         if (mounted) {
           context.read<ProfileProvider>().setProfile(
-            name: data['name'] ?? '',
-            email: data['email'] ?? '',
-            phone: data['phone'] ?? '',
-            bio: data['bio'] ?? '',
+            name: profileData?['name'] ?? user.displayName ?? 'Pengguna',
+            email: user.email ?? email,
+            phone: profileData?['phone'] ?? '',
+            bio: profileData?['bio'] ?? '',
           );
+        }
+
+        if (mounted) {
+          await context.read<SessionProvider>().fetchSessionsFromFirestore();
+        }
+        if (mounted) {
+          await context.read<SessionProvider>().loadMoodHistoryFromFirestore();
+        }
+
+        if (mounted) {
+          setState(() => _loading = false);
 
           Navigator.of(context).pushReplacement(
             PageRouteBuilder(
@@ -81,17 +89,87 @@ class _LoginScreenState extends State<LoginScreen> {
             ),
           );
         }
-      } else {
-        final data = jsonDecode(res.body);
-        final errorMsg = data['detail'] ?? 'Terjadi kesalahan saat masuk';
-        _showSnackbar(errorMsg);
       }
+      return;
     } catch (e) {
       if (mounted) {
         setState(() => _loading = false);
-        _showSnackbar('Gagal terhubung ke ${ApiHelper.baseUrl}. Periksa backend & Wi-Fi.');
+        _showSnackbar(e.toString());
       }
     }
+  }
+
+  void _showForgotPasswordDialog() {
+    final emailCtrl = TextEditingController(text: _emailController.text.trim());
+    bool sending = false;
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          title: const Row(
+            children: [
+              Icon(Icons.lock_reset_rounded, color: AppColors.primary),
+              SizedBox(width: 10),
+              Text('Reset Kata Sandi', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Masukkan alamat email akunmu. Kami akan mengirimkan tautan untuk mengatur ulang kata sandi melalui Firebase.',
+                style: TextStyle(fontSize: 13, color: AppColors.mutedForeground),
+              ),
+              const SizedBox(height: 16),
+              TextField(
+                controller: emailCtrl,
+                keyboardType: TextInputType.emailAddress,
+                decoration: const InputDecoration(
+                  labelText: 'Alamat Email',
+                  hintText: 'nama@contoh.com',
+                  prefixIcon: Icon(Icons.mail_outline_rounded),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: const Text('Batal', style: TextStyle(color: AppColors.mutedForeground)),
+            ),
+            ElevatedButton(
+              onPressed: sending
+                  ? null
+                  : () async {
+                      final resetEmail = emailCtrl.text.trim();
+                      if (resetEmail.isEmpty) return;
+                      setDialogState(() => sending = true);
+                      try {
+                        await AuthService().sendPasswordResetEmail(resetEmail);
+                        if (ctx.mounted) {
+                          Navigator.of(ctx).pop();
+                        }
+                        if (mounted) {
+                          _showSnackbar('Tautan reset kata sandi telah dikirim ke email!');
+                        }
+                      } catch (err) {
+                        setDialogState(() => sending = false);
+                        if (mounted) {
+                          _showSnackbar(err.toString());
+                        }
+                      }
+                    },
+              child: sending
+                  ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Text('Kirim Tautan'),
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   void _showServerConfigDialog() {
@@ -252,7 +330,9 @@ class _LoginScreenState extends State<LoginScreen> {
                           onPressed: () async {
                             await ApiHelper.setBaseUrl(controller.text);
                             if (mounted) setState(() {});
-                            Navigator.of(ctx).pop();
+                            if (ctx.mounted) {
+                              Navigator.of(ctx).pop();
+                            }
                             _showSnackbar('Server disetel ke: ${ApiHelper.baseUrl}');
                           },
                           child: const Text('Simpan'),
@@ -349,7 +429,7 @@ class _LoginScreenState extends State<LoginScreen> {
               Align(
                 alignment: Alignment.centerRight,
                 child: TextButton(
-                  onPressed: () {},
+                  onPressed: _showForgotPasswordDialog,
                   child: const Text('Lupa kata sandi?',
                       style: TextStyle(
                           color: AppColors.primary,

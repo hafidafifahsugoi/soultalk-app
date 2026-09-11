@@ -1,11 +1,9 @@
-import 'dart:convert';
 import 'package:flutter/material.dart';
-import 'package:http/http.dart' as http;
 import 'package:provider/provider.dart';
 import '../theme/app_theme.dart';
 import '../widgets/app_logo.dart';
-import '../helper/api_helper.dart';
 import '../providers/profile_provider.dart';
+import '../services/auth_service.dart';
 import 'main_shell.dart';
 import 'login_screen.dart';
 
@@ -48,6 +46,11 @@ class _RegisterScreenState extends State<RegisterScreen> {
       _showSnackbar('Email wajib diisi');
       return;
     }
+    final emailRegex = RegExp(r'^[\w-\.]+@([\w-]+\.)+[\w-]{2,4}$');
+    if (!emailRegex.hasMatch(email)) {
+      _showSnackbar('Format email tidak valid (tidak boleh ada spasi atau karakter asing)');
+      return;
+    }
     if (password.length < 6) {
       _showSnackbar('Kata sandi minimal 6 karakter');
       return;
@@ -64,54 +67,39 @@ class _RegisterScreenState extends State<RegisterScreen> {
     setState(() => _loading = true);
 
     try {
-      final url = Uri.parse('${ApiHelper.baseUrl}/api/auth/register');
-      final body = jsonEncode({
-        'name': name,
-        'email': email,
-        'password': password,
-      });
+      // Daftarkan akun baru ke Firebase Auth (otomatis membuat dokumen di Cloud Firestore)
+      final credential = await AuthService().signUpWithEmailAndPassword(
+        name: name,
+        email: email,
+        password: password,
+      );
 
-      final res = await http.post(
-        url,
-        headers: {'Content-Type': 'application/json'},
-        body: body,
-      ).timeout(const Duration(seconds: 7));
+      final user = credential.user;
+      if (user != null && mounted) {
+        context.read<ProfileProvider>().setProfile(
+          name: name,
+          email: email,
+          phone: '',
+          bio: 'Mencari ketenangan pikiran dan pertumbuhan pribadi melalui meditasi dan jurnal harian.',
+        );
 
-      setState(() => _loading = false);
+        setState(() => _loading = false);
 
-      if (res.statusCode == 200) {
-        final data = jsonDecode(res.body);
-        final token = data['token'] as String;
-        await ApiHelper.saveToken(token);
-
-        if (mounted) {
-          context.read<ProfileProvider>().setProfile(
-            name: name,
-            email: email,
-            phone: '',
-            bio: 'Mencari ketenangan pikiran dan pertumbuhan pribadi melalui meditasi dan jurnal harian.',
-          );
-
-          Navigator.of(context).pushAndRemoveUntil(
-            PageRouteBuilder(
-              transitionDuration: const Duration(milliseconds: 400),
-              pageBuilder: (_, __, ___) => const MainShell(),
-              transitionsBuilder: (_, animation, __, child) =>
-                  FadeTransition(opacity: animation, child: child),
-            ),
-            (route) => false,
-          );
-        }
-      } else {
-        final data = jsonDecode(res.body);
-        final errorMsg = data['detail'] ?? 'Terjadi kesalahan saat mendaftar';
-        _showSnackbar(errorMsg);
+        Navigator.of(context).pushAndRemoveUntil(
+          PageRouteBuilder(
+            transitionDuration: const Duration(milliseconds: 400),
+            pageBuilder: (_, __, ___) => const MainShell(),
+            transitionsBuilder: (_, animation, __, child) =>
+                FadeTransition(opacity: animation, child: child),
+          ),
+          (route) => false,
+        );
+        return;
       }
     } catch (e) {
-      debugPrint('Registration connection error: $e');
       if (mounted) {
         setState(() => _loading = false);
-        _showSnackbar('Gagal terhubung ke ${ApiHelper.baseUrl}');
+        _showSnackbar(e.toString());
       }
     }
   }

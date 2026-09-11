@@ -2,7 +2,9 @@ import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:http/http.dart' as http;
+import 'package:firebase_auth/firebase_auth.dart';
 import '../helper/api_helper.dart';
+import '../services/firestore_service.dart';
 
 /// Mengelola data profil pengguna di seluruh app.
 /// Menyediakan state nama, email, nomor telepon, bio, dan path avatar.
@@ -12,6 +14,8 @@ class ProfileProvider extends ChangeNotifier {
   String _phone = '+62 812-3456-7890';
   String _bio = 'Mencari ketenangan pikiran dan pertumbuhan pribadi melalui meditasi dan jurnal harian.';
   final String _avatarPath = 'assets/images/user-avatar.png';
+
+  final FirestoreService _firestoreService = FirestoreService();
 
   ProfileProvider() {
     _loadProfile();
@@ -34,7 +38,31 @@ class ProfileProvider extends ChangeNotifier {
       notifyListeners();
     } catch (_) {}
 
+    await fetchProfileFromFirestore();
     await fetchProfileFromBackend();
+  }
+
+  /// Mengambil profil langsung dari Cloud Firestore
+  Future<void> fetchProfileFromFirestore() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    try {
+      final data = await _firestoreService.getUserProfile(user.uid);
+      if (data != null) {
+        _name = data['name'] ?? user.displayName ?? _name;
+        _email = data['email'] ?? user.email ?? _email;
+        _phone = data['phone'] ?? _phone;
+        _bio = data['bio'] ?? _bio;
+        notifyListeners();
+
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('profile_name', _name);
+        await prefs.setString('profile_email', _email);
+        await prefs.setString('profile_phone', _phone);
+        await prefs.setString('profile_bio', _bio);
+      }
+    } catch (_) {}
   }
 
   Future<void> fetchProfileFromBackend() async {
@@ -100,6 +128,22 @@ class ProfileProvider extends ChangeNotifier {
       await prefs.setString('profile_bio', bio);
     } catch (_) {}
 
+    // Sinkronisasi ke Cloud Firestore jika pengguna sedang login
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      try {
+        await _firestoreService.updateUserProfile(user.uid, {
+          'name': name,
+          'email': email,
+          'phone': phone,
+          'bio': bio,
+        });
+        if (name.isNotEmpty) {
+          await user.updateDisplayName(name);
+        }
+      } catch (_) {}
+    }
+
     if (ApiHelper.token == null) return;
     try {
       final url = Uri.parse('${ApiHelper.baseUrl}/api/user/profile');
@@ -111,5 +155,21 @@ class ProfileProvider extends ChangeNotifier {
       });
       await http.post(url, headers: ApiHelper.headers(), body: body);
     } catch (_) {}
+  }
+
+  /// Mereset profil saat pengguna keluar (logout).
+  void clearProfile() {
+    _name = 'Tamu';
+    _email = '';
+    _phone = '';
+    _bio = '';
+    notifyListeners();
+
+    SharedPreferences.getInstance().then((prefs) {
+      prefs.remove('profile_name');
+      prefs.remove('profile_email');
+      prefs.remove('profile_phone');
+      prefs.remove('profile_bio');
+    }).catchError((_) {});
   }
 }

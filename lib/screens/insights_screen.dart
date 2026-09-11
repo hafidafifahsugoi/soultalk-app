@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../providers/session_provider.dart';
 import '../theme/app_theme.dart';
 import 'summary_screen.dart';
+import '../widgets/mood_bunny_icon.dart';
 
 /// Tab "Ringkasan" di bottom nav — menampilkan riwayat sesi,
 /// bukan SummaryScreen langsung (agar tidak ada konflik navigasi).
@@ -157,89 +158,81 @@ class _WeeklyCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final sessionProvider = context.watch<SessionProvider>();
-    final sessions = sessionProvider.sessions;
-    final theme = Theme.of(context);
-
-    // Calculate dynamic stats
-    final totalSessions = sessions.length.toString();
-
-    // Average calm: sum calm percentage
-    double totalCalm = 0;
-    for (final s in sessions) {
-      if (s.moodAbbr == 'Te') {
-        totalCalm += 90;
-      } else if (s.moodAbbr == 'Cm') {
-        totalCalm += 40;
-      } else if (s.moodAbbr == 'Sd') {
-        totalCalm += 50;
-      } else {
-        totalCalm += 72; // St / Sedikit Lelah
-      }
-    }
-    final avgCalm = sessions.isEmpty ? '0%' : '${(totalCalm / sessions.length).toStringAsFixed(0)}%';
-
-    // Total duration: sum minutes
-    int totalMins = 0;
-    for (final s in sessions) {
-      final match = RegExp(r'(\d+)\s*mnt').firstMatch(s.duration);
-      if (match != null) {
-        totalMins += int.parse(match.group(1)!);
-      } else {
-        final secMatch = RegExp(r'(\d+)\s*dtk').firstMatch(s.duration);
-        if (secMatch != null) {
-          // count less than 60s as 1 min for statistics
-          totalMins += 1;
-        }
-      }
-    }
-
-    String durationStr = '${totalMins}m';
-    if (totalMins >= 60) {
-      durationStr = '${totalMins ~/ 60}j ${totalMins % 60}m';
-    }
 
     return Container(
-      padding: const EdgeInsets.all(18),
+      padding: const EdgeInsets.all(20),
       decoration: BoxDecoration(
-        borderRadius: BorderRadius.circular(AppTheme.radius),
-        color: theme.colorScheme.surface,
-        border: Border.all(
-          color: theme.colorScheme.outline.withValues(alpha: 0.6),
-          width: 1.0,
+        gradient: const LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [AppColors.primary, AppColors.accent],
         ),
+        borderRadius: BorderRadius.circular(22),
+        boxShadow: [
+          BoxShadow(
+            color: AppColors.primary.withValues(alpha: 0.25),
+            blurRadius: 18,
+            offset: const Offset(0, 8),
+          ),
+        ],
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Row(
             children: [
-              Icon(Icons.auto_awesome_rounded, color: theme.colorScheme.primary, size: 14),
-              const SizedBox(width: 7),
+              Container(
+                padding: const EdgeInsets.all(6),
+                decoration: BoxDecoration(
+                  color: Colors.white.withValues(alpha: 0.20),
+                  borderRadius: BorderRadius.circular(10),
+                ),
+                child: const Icon(Icons.auto_awesome_rounded, color: Colors.white, size: 14),
+              ),
+              const SizedBox(width: 8),
               Text(
                 'Perkembangan Mingguanmu',
                 style: TextStyle(
-                  color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
+                  color: Colors.white.withValues(alpha: 0.95),
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  letterSpacing: 0.2,
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 14),
-          Row(
-            children: [
-              _MiniStat(totalSessions, 'Sesi'),
-              _MiniStat(avgCalm, 'Indikator\nKetenangan'),
-              _MiniStat(durationStr, 'Durasi\nSesi'),
-            ],
+          const SizedBox(height: 16),
+
+          // Statistik empat kolom dengan gaya soft kaca (glassmorphism)
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 14, horizontal: 6),
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.16),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(
+                color: Colors.white.withValues(alpha: 0.25),
+                width: 1.0,
+              ),
+            ),
+            child: Row(
+              children: [
+                _MiniStat('${sessionProvider.totalSessions}', 'Total Sesi'),
+                _miniDivider(),
+                _MiniStat('${sessionProvider.streakDays} hr', 'Hari Beruntun'),
+                _miniDivider(),
+                _MiniStat(sessionProvider.averageCalm, 'Indikator\nKetenangan'),
+                _miniDivider(),
+                _MiniStat(sessionProvider.totalDurationFormatted, 'Durasi Sesi'),
+              ],
+            ),
           ),
-          const Divider(height: 24, thickness: 0.8),
+          const SizedBox(height: 14),
           Text(
             'Belakangan ini kamu terlihat lebih sering merasa tenang setelah bercerita. Ingat untuk terus meluangkan waktu bagi dirimu.',
             style: TextStyle(
-              color: theme.colorScheme.onSurface.withValues(alpha: 0.7),
+              color: Colors.white.withValues(alpha: 0.88),
               fontSize: 12,
-              height: 1.4,
+              height: 1.45,
               fontStyle: FontStyle.italic,
             ),
           ),
@@ -247,6 +240,12 @@ class _WeeklyCard extends StatelessWidget {
       ),
     );
   }
+
+  Widget _miniDivider() => Container(
+        width: 1,
+        height: 32,
+        color: Colors.white.withValues(alpha: 0.28),
+      );
 }
 
 class _MiniStat extends StatelessWidget {
@@ -256,15 +255,14 @@ class _MiniStat extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return Expanded(
       child: Column(
         children: [
           Text(
             value,
-            style: TextStyle(
-              color: theme.colorScheme.onSurface,
-              fontSize: 20,
+            style: const TextStyle(
+              color: Colors.white,
+              fontSize: 16.5,
               fontWeight: FontWeight.w800,
             ),
           ),
@@ -272,10 +270,11 @@ class _MiniStat extends StatelessWidget {
           Text(
             label,
             textAlign: TextAlign.center,
+            maxLines: 2,
             style: TextStyle(
-              color: theme.colorScheme.onSurface.withValues(alpha: 0.6),
-              fontSize: 11,
-              height: 1.3,
+              color: Colors.white.withValues(alpha: 0.85),
+              fontSize: 10.5,
+              height: 1.25,
             ),
           ),
         ],
@@ -310,18 +309,10 @@ class _SessionTile extends StatelessWidget {
         ),
         child: Row(
           children: [
-            // Emoji
-            Container(
-              width: 44,
-              height: 44,
-              decoration: BoxDecoration(
-                color: theme.colorScheme.secondary.withValues(alpha: 0.15),
-                borderRadius: BorderRadius.circular(14),
-              ),
-              child: Center(
-                child:
-                    Text(session.emoji, style: const TextStyle(fontSize: 22)),
-              ),
+            // Bunny Mood Icon
+            MoodBunnyIcon(
+              emoji: session.emoji.isNotEmpty ? session.emoji : session.moodAbbr,
+              size: 42,
             ),
             const SizedBox(width: 12),
 

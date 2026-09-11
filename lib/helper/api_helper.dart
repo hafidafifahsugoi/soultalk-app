@@ -34,12 +34,12 @@ class ApiHelper {
       return;
     }
 
-    // Candidates to test for the server
+    // Candidates to test for the server (Prioritaskan Backend Lokal dengan fitur Kamera & AI)
     final candidates = [
-      'https://backend-pi-ten-58.vercel.app', // New Vercel Cloud Server (Online 24/7)
+      'http://localhost:8000',                 // USB adb reverse (Paling cepat & stabil)
       'http://192.168.1.9:8000',               // PC Wi-Fi IP
-      'http://localhost:8000',                 // Works if using USB adb reverse
       'http://10.0.2.2:8000',                  // Android Emulator
+      'https://backend-pi-ten-58.vercel.app', // Vercel Cloud Server Fallback
     ];
 
     for (final candidate in candidates) {

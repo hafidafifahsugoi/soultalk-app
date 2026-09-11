@@ -1,8 +1,10 @@
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
+import 'package:firebase_auth/firebase_auth.dart';
 import '../helper/database_helper.dart';
 import '../helper/api_helper.dart';
+import '../services/firestore_service.dart';
 
 class SessionItem {
   final String title;
@@ -31,9 +33,113 @@ class SessionItem {
 class SessionProvider extends ChangeNotifier {
   final List<SessionItem> _sessions = [];
   final List<Map<String, dynamic>> _moodHistoryList = [];
+  final FirestoreService _firestoreService = FirestoreService();
 
   List<SessionItem> get sessions => List.unmodifiable(_sessions);
   List<Map<String, dynamic>> get moodHistoryList => List.unmodifiable(_moodHistoryList);
+
+  /// Total sesi pengguna secara real-time
+  int get totalSessions => _sessions.length;
+
+  /// Rata-rata indikator ketenangan pengguna (misal: '90%')
+  String get averageCalm {
+    if (_sessions.isEmpty) return '0%';
+    double total = 0;
+    int count = 0;
+    for (final s in _sessions) {
+      final match = RegExp(r'(\d+)').firstMatch(s.accuracy);
+      if (match != null) {
+        final val = double.tryParse(match.group(1)!);
+        if (val != null) {
+          total += val;
+          count++;
+          continue;
+        }
+      }
+      if (s.moodAbbr == 'Te') {
+        total += 90;
+      } else if (s.moodAbbr == 'Bh') {
+        total += 95;
+      } else if (s.moodAbbr == 'Cm') {
+        total += 40;
+      } else if (s.moodAbbr == 'Sd') {
+        total += 50;
+      } else if (s.moodAbbr == 'Kw') {
+        total += 45;
+      } else {
+        total += 75;
+      }
+      count++;
+    }
+    if (count == 0) return '0%';
+    return '${(total / count).round()}%';
+  }
+
+  /// Total durasi seluruh sesi obrolan/meditasi secara presisi
+  String get totalDurationFormatted {
+    if (_sessions.isEmpty) return '0m';
+    int totalSeconds = 0;
+    for (final s in _sessions) {
+      final minMatch = RegExp(r'(\d+)\s*(?:mnt|m|min)', caseSensitive: false).firstMatch(s.duration);
+      if (minMatch != null) {
+        totalSeconds += (int.tryParse(minMatch.group(1)!) ?? 0) * 60;
+      }
+      final secMatch = RegExp(r'(\d+)\s*(?:dtk|s|sec)', caseSensitive: false).firstMatch(s.duration);
+      if (secMatch != null) {
+        totalSeconds += int.tryParse(secMatch.group(1)!) ?? 0;
+      }
+    }
+    if (totalSeconds == 0) return '1m';
+    if (totalSeconds < 60) {
+      return '$totalSeconds dtk';
+    }
+    final totalMins = (totalSeconds / 60).round();
+    if (totalMins >= 60) {
+      final hours = totalMins ~/ 60;
+      final mins = totalMins % 60;
+      return mins > 0 ? '${hours}j ${mins}m' : '${hours}j';
+    }
+    return '${totalMins}m';
+  }
+
+  /// Menghitung hari beruntun (streak) secara real-time
+  int get streakDays {
+    if (_sessions.isEmpty && _moodHistoryList.isEmpty) return 0;
+    final Set<String> activeDates = {};
+    for (final item in _moodHistoryList) {
+      final d = item['date']?.toString();
+      if (d != null && d.length >= 10) {
+        activeDates.add(d.substring(0, 10));
+      }
+    }
+    final today = DateTime.now();
+    final todayStr = '${today.year.toString().padLeft(4, '0')}-${today.month.toString().padLeft(2, '0')}-${today.day.toString().padLeft(2, '0')}';
+    if (_sessions.isNotEmpty) {
+      activeDates.add(todayStr);
+    }
+    int streak = 0;
+    DateTime checkDate = today;
+    final checkDateStr = '${checkDate.year.toString().padLeft(4, '0')}-${checkDate.month.toString().padLeft(2, '0')}-${checkDate.day.toString().padLeft(2, '0')}';
+    if (!activeDates.contains(checkDateStr)) {
+      final yesterday = today.subtract(const Duration(days: 1));
+      final yesterdayStr = '${yesterday.year.toString().padLeft(4, '0')}-${yesterday.month.toString().padLeft(2, '0')}-${yesterday.day.toString().padLeft(2, '0')}';
+      if (activeDates.contains(yesterdayStr)) {
+        checkDate = yesterday;
+      } else {
+        return _sessions.isNotEmpty ? 1 : 0;
+      }
+    }
+    while (true) {
+      final dStr = '${checkDate.year.toString().padLeft(4, '0')}-${checkDate.month.toString().padLeft(2, '0')}-${checkDate.day.toString().padLeft(2, '0')}';
+      if (activeDates.contains(dStr)) {
+        streak++;
+        checkDate = checkDate.subtract(const Duration(days: 1));
+      } else {
+        break;
+      }
+    }
+    return streak > 0 ? streak : (_sessions.isNotEmpty ? 1 : 0);
+  }
 
   SessionProvider() {
     _loadSessions();
@@ -48,6 +154,21 @@ class SessionProvider extends ChangeNotifier {
       _moodHistoryList.addAll(loaded.reversed); // Urutkan kronologis dari kiri ke kanan untuk grafik
       notifyListeners();
     } catch (_) {}
+
+    await loadMoodHistoryFromFirestore();
+  }
+
+  Future<void> loadMoodHistoryFromFirestore() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+    try {
+      final records = await _firestoreService.getMoodRecords(user.uid, 7);
+      if (records.isNotEmpty) {
+        _moodHistoryList.clear();
+        _moodHistoryList.addAll(records.reversed);
+        notifyListeners();
+      }
+    } catch (_) {}
   }
 
   Future<void> saveMoodCheckIn(int moodIndex, String emoji, String label, {String? note}) async {
@@ -56,6 +177,49 @@ class SessionProvider extends ChangeNotifier {
       await dbHelper.insertOrUpdateMoodRecord(moodIndex, emoji, label, note);
       await loadMoodHistory();
     } catch (_) {}
+
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      try {
+        await _firestoreService.saveMoodCheckIn(user.uid, moodIndex, emoji, label, note: note);
+      } catch (_) {}
+    }
+  }
+
+  /// Ambil rekaman suasana hati untuk bulan tertentu (lokal SQLite & fallback Firestore)
+  Future<List<Map<String, dynamic>>> getMoodRecordsForMonth(int year, int month) async {
+    try {
+      final dbHelper = DatabaseHelper.instance;
+      final local = await dbHelper.getMoodRecordsByMonth(year, month);
+      if (local.isNotEmpty) return local;
+    } catch (_) {}
+
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      try {
+        final monthStr = month.toString().padLeft(2, '0');
+        final all = await _firestoreService.getAllMoodRecords(user.uid);
+        return all.where((m) => (m['date'] as String? ?? '').startsWith('$year-$monthStr')).toList();
+      } catch (_) {}
+    }
+    return [];
+  }
+
+  /// Ambil semua rekaman suasana hati (untuk statistik / kalender)
+  Future<List<Map<String, dynamic>>> getAllMoodRecords() async {
+    try {
+      final dbHelper = DatabaseHelper.instance;
+      final local = await dbHelper.getAllMoodRecords();
+      if (local.isNotEmpty) return local;
+    } catch (_) {}
+
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      try {
+        return await _firestoreService.getAllMoodRecords(user.uid);
+      } catch (_) {}
+    }
+    return [];
   }
 
   Future<void> clearMoodHistory() async {
@@ -65,6 +229,13 @@ class SessionProvider extends ChangeNotifier {
       _moodHistoryList.clear();
       notifyListeners();
     } catch (_) {}
+
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      try {
+        await _firestoreService.clearMoodRecords(user.uid);
+      } catch (_) {}
+    }
   }
 
   static const List<SessionItem> _defaultSessions = [
@@ -163,7 +334,30 @@ class SessionProvider extends ChangeNotifier {
       notifyListeners();
     } catch (_) {}
 
+    await fetchSessionsFromFirestore();
     await fetchSessionsFromBackend();
+  }
+
+  /// Mengambil sesi percakapan/meditasi langsung dari Cloud Firestore
+  Future<void> fetchSessionsFromFirestore() async {
+    final user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    try {
+      final loaded = await _firestoreService.getSessions(user.uid);
+      if (loaded.isNotEmpty) {
+        _sessions.clear();
+        _sessions.addAll(loaded);
+        notifyListeners();
+
+        // Sync local SQLite cache
+        final dbHelper = DatabaseHelper.instance;
+        await dbHelper.clearAll();
+        for (final session in loaded) {
+          await dbHelper.insertSession(session);
+        }
+      }
+    } catch (_) {}
   }
 
   Future<void> fetchSessionsFromBackend() async {
@@ -211,6 +405,14 @@ class SessionProvider extends ChangeNotifier {
       await DatabaseHelper.instance.insertSession(item);
     } catch (_) {}
 
+    // Simpan ke Cloud Firestore
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      try {
+        await _firestoreService.saveSession(user.uid, item);
+      } catch (_) {}
+    }
+
     if (ApiHelper.token == null) return;
     try {
       final url = Uri.parse('${ApiHelper.baseUrl}/api/sessions');
@@ -236,6 +438,14 @@ class SessionProvider extends ChangeNotifier {
     try {
       await DatabaseHelper.instance.clearAll();
     } catch (_) {}
+
+    // Hapus dari Cloud Firestore
+    final user = FirebaseAuth.instance.currentUser;
+    if (user != null) {
+      try {
+        await _firestoreService.clearSessions(user.uid);
+      } catch (_) {}
+    }
 
     if (ApiHelper.token == null) return true;
     try {

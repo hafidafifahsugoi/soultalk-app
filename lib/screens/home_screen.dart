@@ -6,6 +6,8 @@ import '../theme/app_theme.dart';
 import 'video_call_screen.dart';
 import 'main_shell.dart';
 import 'summary_screen.dart';
+import 'mood_calendar_screen.dart';
+import '../widgets/mood_bunny_icon.dart';
 
 class HomeScreen extends StatefulWidget {
   const HomeScreen({super.key});
@@ -179,7 +181,6 @@ class _HomeScreenState extends State<HomeScreen> {
           Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: List.generate(_moods.length, (index) {
-              final mood = _moods[index];
               final isSelected = _selectedMoodIndex == index;
               return GestureDetector(
                 onTap: () {
@@ -193,22 +194,24 @@ class _HomeScreenState extends State<HomeScreen> {
                 },
                 child: AnimatedContainer(
                   duration: const Duration(milliseconds: 200),
-                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                  width: 54,
+                  height: 54,
+                  alignment: Alignment.center,
                   decoration: BoxDecoration(
                     color: isSelected
-                        ? theme.colorScheme.primary.withValues(alpha: 0.12)
+                        ? theme.colorScheme.primary.withValues(alpha: 0.14)
                         : theme.colorScheme.surface,
-                    borderRadius: BorderRadius.circular(12),
+                    borderRadius: BorderRadius.circular(16),
                     border: Border.all(
                       color: isSelected
                           ? theme.colorScheme.primary
-                          : theme.colorScheme.outline.withValues(alpha: 0.5),
-                      width: 1.5,
+                          : theme.colorScheme.outline.withValues(alpha: 0.4),
+                      width: isSelected ? 2.0 : 1.0,
                     ),
                   ),
-                  child: Text(
-                    mood['emoji']!,
-                    style: const TextStyle(fontSize: 24),
+                  child: MoodBunnyIcon(
+                    moodIndex: index,
+                    size: 38,
                   ),
                 ),
               );
@@ -350,8 +353,41 @@ class _HomeScreenState extends State<HomeScreen> {
           const SizedBox(height: 28),
 
           // Riwayat Suasana Hati
-          Text('Suasana Hati',
-              style: textTheme.titleLarge?.copyWith(fontSize: 18)),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('Suasana Hati',
+                  style: textTheme.titleLarge?.copyWith(fontSize: 18)),
+              TextButton(
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const MoodCalendarScreen(),
+                    ),
+                  );
+                },
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      'Lihat Detail',
+                      style: TextStyle(
+                        color: theme.colorScheme.primary,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                    const SizedBox(width: 4),
+                    Icon(
+                      Icons.chevron_right_rounded,
+                      size: 16,
+                      color: theme.colorScheme.primary,
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
           const SizedBox(height: 10),
           if (sessionProvider.moodHistoryList.isEmpty) ...[
             Container(
@@ -396,10 +432,9 @@ class _HomeScreenState extends State<HomeScreen> {
                   final dayLabel = days[parsedDate.weekday - 1];
                   
                   final moodIndex = m['moodIndex'] as int;
-                  final emoji = m['emoji'] as String;
                   final level = 30.0 + (moodIndex * 17.5);
                   
-                  return _buildDynamicMoodBar(context, dayLabel, emoji, level);
+                  return _buildDynamicMoodBar(context, dayLabel, moodIndex, level);
                 }).toList(),
               ),
             ),
@@ -432,7 +467,7 @@ class _HomeScreenState extends State<HomeScreen> {
 
 
 
-  Widget _buildDynamicMoodBar(BuildContext context, String day, String emoji, double level) {
+  Widget _buildDynamicMoodBar(BuildContext context, String day, int moodIndex, double level) {
     final theme = Theme.of(context);
     return Column(
       mainAxisSize: MainAxisSize.min,
@@ -453,9 +488,15 @@ class _HomeScreenState extends State<HomeScreen> {
             ),
           ),
         ),
-        const SizedBox(height: 6),
-        Text(emoji, style: const TextStyle(fontSize: 16)),
-        const SizedBox(height: 2),
+        const SizedBox(height: 8),
+        SizedBox(
+          width: 28,
+          height: 28,
+          child: Center(
+            child: MoodBunnyIcon(moodIndex: moodIndex, size: 28),
+          ),
+        ),
+        const SizedBox(height: 4),
         Text(day,
             style: TextStyle(
                 fontSize: 11,
@@ -523,57 +564,9 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildMoodIndicator(SessionItem c) {
-    List<Color> gradientColors;
-    final abbr = c.moodAbbr.toLowerCase();
-    
-    if (abbr.contains('sd') || abbr.contains('cm')) {
-      // Sedih, Cemas: Soft Lavender to Indigo (using 8494FF & 6367FF)
-      gradientColors = [
-        const Color(0xFF8494FF),
-        const Color(0xFF6367FF),
-      ];
-    } else if (abbr.contains('te') || abbr.contains('bi')) {
-      // Tenang, Biasa: Soft Slate Blue to Steel Blue (using 5FACD3 & 78A4CB)
-      gradientColors = [
-        const Color(0xFF5FACD3),
-        const Color(0xFF78A4CB),
-      ];
-    } else {
-      // Baik, Hebat: Soft Mint Sage to Soft Aqua (using 89D7B7 & 8FDDDF)
-      gradientColors = [
-        const Color(0xFF89D7B7),
-        const Color(0xFF8FDDDF),
-      ];
-    }
-
-    return Container(
-      width: 36,
-      height: 36,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: LinearGradient(
-          colors: gradientColors,
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: gradientColors[0].withValues(alpha: 0.25),
-            blurRadius: 10,
-            offset: const Offset(0, 3),
-          ),
-        ],
-        border: Border.all(
-          color: Colors.white.withValues(alpha: 0.15),
-          width: 1.5,
-        ),
-      ),
-      child: Center(
-        child: Text(
-          c.emoji.isNotEmpty ? c.emoji : '😐',
-          style: const TextStyle(fontSize: 14),
-        ),
-      ),
+    return MoodBunnyIcon(
+      emoji: c.emoji.isNotEmpty ? c.emoji : c.moodAbbr,
+      size: 42,
     );
   }
 }

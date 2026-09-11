@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'dart:math' as math;
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -78,9 +79,23 @@ class _VideoCallScreenState extends State<VideoCallScreen>
   List<CameraDescription>? _cameras;
   bool _isCameraInitialized = false;
 
+  // ── Facial Emotion Detection & AI Awareness ──
+  Timer? _emotionTimer;
+  bool _isAnalyzingEmotion = false;
+  String _currentEmotion = 'Memindai';
+  String _currentEmotionEmoji = '👀';
+  int _consecutiveSadCount = 0;
+  DateTime? _lastProactiveRemarkTime;
+  String _lastTriggeredEmotion = '';
+  int _totalHappyFrames = 0;
+  int _totalSadFrames = 0;
+  int _totalNeutralFrames = 0;
+
   final SpeechToText _speechToText = SpeechToText();
   bool _speechEnabled = false;
   bool _isListening = false;
+  String _lastRecognizedText = '';
+  String? _sttErrorMessage;
 
   final FlutterTts _flutterTts = FlutterTts();
   bool _ttsInitialized = false;
@@ -238,6 +253,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
           setState(() {
             _isCameraInitialized = true;
           });
+          _startEmotionDetection();
         }
       }
     } catch (e) {
@@ -253,16 +269,45 @@ class _VideoCallScreenState extends State<VideoCallScreen>
           if (mounted) {
             if (status == 'done' || status == 'notListening') {
               setState(() => _isListening = false);
+              // Kirim ucapan jika ada kata yang sempat terekam sebelum status berakhir
+              if (_lastRecognizedText.trim().isNotEmpty) {
+                final textToProcess = _lastRecognizedText.trim();
+                _lastRecognizedText = '';
+                _handleVoiceInput(textToProcess);
+              } else if (_statusIndex == 0 && !_muted && !_showTextInput && mounted) {
+                // Auto-restart listening agar mic tidak mati sendiri setelah jeda diam
+                Future.delayed(const Duration(milliseconds: 500), () {
+                  if (_statusIndex == 0 && !_muted && !_showTextInput && !_isListening && mounted) {
+                    _startListening();
+                  }
+                });
+              }
             }
           }
         },
         onError: (errorNotification) {
           debugPrint('STT Error: $errorNotification');
           if (mounted) {
-            setState(() => _isListening = false);
+            setState(() {
+              _isListening = false;
+              _sttErrorMessage = errorNotification.errorMsg;
+            });
+            if (_lastRecognizedText.trim().isNotEmpty) {
+              final textToProcess = _lastRecognizedText.trim();
+              _lastRecognizedText = '';
+              _handleVoiceInput(textToProcess);
+            } else if (_statusIndex == 0 && !_muted && !_showTextInput && mounted) {
+              // Jika timeout karena diam, re-arm listening lagi
+              Future.delayed(const Duration(milliseconds: 800), () {
+                if (_statusIndex == 0 && !_muted && !_showTextInput && !_isListening && mounted) {
+                  _startListening();
+                }
+              });
+            }
           }
         },
       );
+      if (mounted) setState(() {});
     } catch (e) {
       debugPrint("STT initialization failed: $e");
     }
@@ -303,18 +348,30 @@ class _VideoCallScreenState extends State<VideoCallScreen>
   }
 
   void _startListening() async {
-    if (!_speechEnabled || _isListening || _muted || _showTextInput) return;
+    if (!_speechEnabled || _muted || _showTextInput) return;
+    if (_isListening) return;
     try {
-      setState(() => _isListening = true);
+      _lastRecognizedText = '';
+      setState(() {
+        _isListening = true;
+        _sttErrorMessage = null;
+      });
       await _speechToText.listen(
         onResult: (result) {
-          if (result.finalResult && result.recognizedWords.trim().isNotEmpty) {
-            final text = result.recognizedWords.trim();
+          _lastRecognizedText = result.recognizedWords.trim();
+          if (result.finalResult && _lastRecognizedText.isNotEmpty) {
+            final text = _lastRecognizedText;
+            _lastRecognizedText = '';
             _handleVoiceInput(text);
           }
         },
-        localeId: 'id_ID',
-        pauseFor: const Duration(seconds: 2),
+        listenOptions: SpeechListenOptions(
+          localeId: 'id_ID',
+          listenFor: const Duration(seconds: 45),
+          pauseFor: const Duration(seconds: 4),
+          cancelOnError: false,
+          partialResults: true,
+        ),
       );
     } catch (e) {
       debugPrint("STT listen failed: $e");
@@ -353,17 +410,191 @@ class _VideoCallScreenState extends State<VideoCallScreen>
     _handleSendInput();
   }
 
+  void _startEmotionDetection() {
+    _emotionTimer?.cancel();
+    // Beri jeda setelah inisialisasi, lalu deteksi setiap 3.5 detik
+    _emotionTimer = Timer.periodic(const Duration(milliseconds: 3500), (_) {
+      if (_cameraOn && _isCameraInitialized && !_isAnalyzingEmotion) {
+        _captureAndAnalyzeFace();
+      }
+    });
+  }
+
+  void _stopEmotionDetection() {
+    _emotionTimer?.cancel();
+    _emotionTimer = null;
+  }
+
+  Future<void> _captureAndAnalyzeFace() async {
+    if (_cameraController == null || !_cameraController!.value.isInitialized) return;
+    if (_cameraController!.value.isTakingPicture) return;
+
+    _isAnalyzingEmotion = true;
+    try {
+      final file = await _cameraController!.takePicture();
+      final bytes = await file.readAsBytes();
+      
+      // Hapus file temporary agar penyimpanan HP tidak penuh
+      try {
+        final f = File(file.path);
+        if (await f.exists()) {
+          await f.delete();
+        }
+      } catch (_) {}
+
+      final base64Image = base64Encode(bytes);
+      final url = Uri.parse('${ApiHelper.baseUrl}/api/detect-emotion');
+      final res = await http.post(
+        url,
+        headers: ApiHelper.headers(),
+        body: jsonEncode({'image': base64Image}),
+      ).timeout(const Duration(seconds: 4));
+
+      if (res.statusCode == 200 && mounted) {
+        final data = jsonDecode(res.body);
+        final bool faceDetected = data['face_detected'] ?? false;
+        final String emotion = data['emotion'] ?? 'Biasa';
+        final String emoji = data['emoji'] ?? '🙂';
+
+        setState(() {
+          if (faceDetected) {
+            _currentEmotion = emotion;
+            _currentEmotionEmoji = emoji;
+            if (emotion == 'Senang') _totalHappyFrames++;
+            if (emotion == 'Sedih') _totalSadFrames++;
+            if (emotion == 'Biasa') _totalNeutralFrames++;
+          } else {
+            _currentEmotion = 'Mencari';
+            _currentEmotionEmoji = '👤';
+          }
+        });
+
+        if (faceDetected) {
+          _handleProactiveAiReaction(emotion);
+        }
+      } else if (mounted) {
+        debugPrint("Emotion API Error: ${res.statusCode} ${res.body}");
+        if (ApiHelper.baseUrl.contains('vercel.app') && res.statusCode == 404) {
+          // Tetap berikan respons visual agar pengguna tidak terganggu
+          setState(() {
+            _currentEmotion = 'Aktif';
+            _currentEmotionEmoji = '🙂';
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint("Face emotion analysis error: $e");
+      // Jika koneksi lokal gagal karena HP dicabut dari USB/laptop, alihkan otomatis ke Vercel Cloud!
+      if (!ApiHelper.baseUrl.contains('vercel.app')) {
+        debugPrint("Switching to online Vercel cloud server for standalone mobile use...");
+        await ApiHelper.setBaseUrl('https://backend-pi-ten-58.vercel.app');
+      }
+    } finally {
+      _isAnalyzingEmotion = false;
+    }
+  }
+
+  void _handleProactiveAiReaction(String emotion) {
+    // Hanya bereaksi jika AI sedang standby / mendengarkan
+    if (_statusIndex != 0) return;
+    if (_showTextInput) return;
+
+    final now = DateTime.now();
+    // Cooldown minimal 40 detik agar AI tidak mengganggu atau cerewet
+    if (_lastProactiveRemarkTime != null &&
+        now.difference(_lastProactiveRemarkTime!).inSeconds < 40) {
+      return;
+    }
+
+    if (emotion == 'Sedih') {
+      _consecutiveSadCount++;
+      // Terdeteksi sedih 2 siklus berurutan (~7 detik murung / tidak senyum)
+      if (_consecutiveSadCount >= 2) {
+        _consecutiveSadCount = 0;
+        _lastProactiveRemarkTime = now;
+        _lastTriggeredEmotion = 'Sedih';
+
+        final sadRemarks = [
+          'Kak, aku perhatikan raut wajahmu kelihatan agak sedih dan murung... Ada hal berat yang lagi mengganjal di pikiranmu? Mau cerita pelan-pelan ke aku?',
+          'Tatap matamu kelihatan menyimpan beban ya... Nggak apa-apa, tumpahin aja kalau mau cerita. Aku di sini setia mendengarkanmu.',
+          'Aku melihat wajahmu tampak kurang bersemangat dan sayu. Kamu sudah luar biasa bertahan sejauh ini, mau cerita apa yang sedang terjadi?',
+        ];
+        final remark = (sadRemarks..shuffle()).first;
+        _triggerAiProactiveSpeech(remark);
+      }
+    } else if (emotion == 'Senang') {
+      if (_lastTriggeredEmotion == 'Sedih') {
+        _consecutiveSadCount = 0;
+        _lastTriggeredEmotion = 'Senang';
+        _lastProactiveRemarkTime = now;
+
+        final happyRemarks = [
+          'Nah, begitu dong tersenyum! Senyummu manis banget, rasanya auramu langsung lebih cerah dan hangat.',
+          'Senang banget deh lihat senyummu barusan! Semoga perasaanmu semakin lega dan damai ya.',
+        ];
+        final remark = (happyRemarks..shuffle()).first;
+        _triggerAiProactiveSpeech(remark);
+      } else {
+        _consecutiveSadCount = 0;
+      }
+    } else if (emotion == 'Lelah') {
+      _consecutiveSadCount = 0;
+      if (_lastTriggeredEmotion != 'Lelah') {
+        _lastProactiveRemarkTime = now;
+        _lastTriggeredEmotion = 'Lelah';
+        _triggerAiProactiveSpeech(
+          'Matamu kelihatan agak lelah dan mengantuk... Hari ini kegiatannya padat banget ya? Jangan lupa istirahat yang cukup ya.',
+        );
+      }
+    } else {
+      _consecutiveSadCount = 0;
+    }
+  }
+
+  void _triggerAiProactiveSpeech(String speechText) {
+    if (!mounted) return;
+    setState(() {
+      _chat.add(_ChatLine(isAi: true, text: speechText));
+      _statusIndex = 2; // AI masuk status Berbicara
+    });
+    _scrollToBottom();
+    _waveAnim.repeat(reverse: true);
+
+    if (_ttsInitialized) {
+      _speak(speechText);
+    } else {
+      final duration = Duration(milliseconds: math.max(2500, speechText.length * 60));
+      Timer(duration, () {
+        if (!mounted) return;
+        setState(() {
+          _statusIndex = 0; // Kembali mendengarkan
+        });
+        _waveAnim.stop();
+        _startListening();
+      });
+    }
+  }
+
   void _toggleCamera() async {
     if (_cameraController == null) return;
     try {
       if (_cameraOn) {
         await _cameraController!.pausePreview();
+        _stopEmotionDetection();
+        setState(() {
+          _cameraOn = false;
+          _currentEmotion = 'Kamera Mati';
+          _currentEmotionEmoji = '📷';
+        });
       } else {
         await _cameraController!.resumePreview();
+        setState(() {
+          _cameraOn = true;
+          _currentEmotion = 'Mendeteksi...';
+          _currentEmotionEmoji = '🔍';
+        });
+        _startEmotionDetection();
       }
-      setState(() {
-        _cameraOn = !_cameraOn;
-      });
     } catch (e) {
       debugPrint("Toggle camera failed: $e");
     }
@@ -375,6 +606,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
     _timer?.cancel();
     _statusTimer?.cancel();
     _chatTimer?.cancel();
+    _emotionTimer?.cancel();
     _cameraController?.dispose();
     _orbPulse.dispose();
     _orbGlow.dispose();
@@ -393,74 +625,121 @@ class _VideoCallScreenState extends State<VideoCallScreen>
   }
 
   Map<String, dynamic> _determineMood() {
+    final userMessages = _chat.where((m) => !m.isAi).toList();
+
+    // Jika belum ada pesan dari user (sesi terlalu singkat / belum sempat bercerita)
+    if (userMessages.isEmpty) {
+      return {
+        'primaryMood': 'Belum Teranalisis',
+        'emoji': '😐',
+        'moodAbbr': '--',
+        'accuracy': '0%',
+        'observations': [
+          'Sesi panggilan terlalu singkat atau belum ada obrolan yang terekam.',
+          'SoulTalk belum bisa menganalisis suasana hatimu karena kamu belum sempat bercerita.',
+          'Di sesi berikutnya, silakan bercerita lewat suara atau gunakan tombol Ketik ya!',
+        ],
+      };
+    }
+
     int stressCount = 0;
     int anxietyCount = 0;
     int sadnessCount = 0;
+    int happyCount = 0;
 
-    for (final line in _chat) {
-      if (!line.isAi) {
-        final text = line.text.toLowerCase();
-        if (text.contains('stres') || text.contains('lelah') || text.contains('kerja')) {
-          stressCount++;
-        }
-        if (text.contains('cemas') || text.contains('takut') || text.contains('panik')) {
-          anxietyCount++;
-        }
-        if (text.contains('sedih') || text.contains('kecewa') || text.contains('nangis')) {
-          sadnessCount++;
-        }
+    // Bobot emosi dari rekaman kamera visual
+    if (_totalSadFrames > 2) sadnessCount += (_totalSadFrames ~/ 2);
+    if (_totalHappyFrames > 2) happyCount += (_totalHappyFrames ~/ 2);
+
+    for (final line in userMessages) {
+      final text = line.text.toLowerCase();
+      if (text.contains('stres') || text.contains('lelah') || text.contains('kerja') || text.contains('capek') || text.contains('pusing')) {
+        stressCount++;
+      }
+      if (text.contains('cemas') || text.contains('takut') || text.contains('panik') || text.contains('khawatir') || text.contains('was-was')) {
+        anxietyCount++;
+      }
+      if (text.contains('sedih') || text.contains('kecewa') || text.contains('nangis') || text.contains('hancur') || text.contains('galau')) {
+        sadnessCount++;
+      }
+      if (text.contains('senang') || text.contains('bahagia') || text.contains('lega') || text.contains('gembira') || text.contains('syukur')) {
+        happyCount++;
       }
     }
 
-    if (stressCount >= anxietyCount && stressCount >= sadnessCount && stressCount > 0) {
-      return {
-        'primaryMood': 'Sedikit Lelah',
-        'emoji': '😔',
-        'moodAbbr': 'St',
-        'accuracy': '85%',
-        'observations': [
-          'Pikiranmu terdeteksi sedang mengalami kelelahan mental yang cukup terasa.',
-          'Beban utamamu saat ini terpantau berasal dari tekanan aktivitas pekerjaan.',
-          'Meskipun lelah, kamu luar biasa karena tetap tenang dan stabil saat bercerita.',
-        ],
-      };
-    } else if (anxietyCount >= stressCount && anxietyCount >= sadnessCount && anxietyCount > 0) {
-      return {
-        'primaryMood': 'Cemas',
-        'emoji': '😰',
-        'moodAbbr': 'Cm',
-        'accuracy': '78%',
-        'observations': [
-          'Terdeteksi adanya tingkat kekhawatiran yang cukup intens dalam pikiranmu.',
-          'Kecemasan ini memicu respons tubuh berupa ketegangan otot dan pernapasan pendek.',
-          'Kamu sangat hebat karena berhasil mengekspresikan kecemasan ini dengan runtut.',
-        ],
-      };
-    } else if (sadnessCount >= stressCount && sadnessCount >= anxietyCount && sadnessCount > 0) {
-      return {
-        'primaryMood': 'Sedih',
-        'emoji': '😢',
-        'moodAbbr': 'Sd',
-        'accuracy': '82%',
-        'observations': [
-          'Terlihat ada kesedihan mendalam yang sedang kamu simpan dalam hatimu.',
-          'Meluapkan emosi sedih adalah hal yang baik dan wajar untuk kesehatan mental.',
-          'Terima kasih sudah berani membuka diri. Percayalah, mendung ini akan berlalu.',
-        ],
-      };
+    final observations = <String>[];
+    String primaryMood;
+    String emoji;
+    String moodAbbr;
+    String accuracy;
+
+    if (stressCount >= anxietyCount && stressCount >= sadnessCount && stressCount >= happyCount && stressCount > 0) {
+      primaryMood = 'Sedikit Lelah';
+      emoji = '😔';
+      moodAbbr = 'St';
+      accuracy = '85%';
+      observations.addAll([
+        'Pikiranmu terdeteksi sedang mengalami kelelahan mental yang cukup terasa.',
+        'Beban utamamu saat ini terpantau berasal dari tekanan aktivitas atau pekerjaan.',
+        'Meskipun lelah, kamu luar biasa karena tetap tenang dan stabil saat bercerita.',
+      ]);
+    } else if (anxietyCount >= stressCount && anxietyCount >= sadnessCount && anxietyCount >= happyCount && anxietyCount > 0) {
+      primaryMood = 'Cemas';
+      emoji = '😰';
+      moodAbbr = 'Cm';
+      accuracy = '78%';
+      observations.addAll([
+        'Terdeteksi adanya tingkat kekhawatiran yang cukup intens dalam pikiranmu.',
+        'Kecemasan ini memicu respons tubuh berupa ketegangan otot dan pernapasan pendek.',
+        'Kamu sangat hebat karena berhasil mengekspresikan kekhawatiran ini dengan runtut.',
+      ]);
+    } else if (sadnessCount >= stressCount && sadnessCount >= anxietyCount && sadnessCount >= happyCount && sadnessCount > 0) {
+      primaryMood = 'Sedih';
+      emoji = '😢';
+      moodAbbr = 'Sd';
+      accuracy = '82%';
+      observations.addAll([
+        'Terlihat ada kesedihan mendalam yang sedang kamu simpan dalam hatimu.',
+        'Meluapkan emosi sedih adalah hal yang baik dan wajar untuk kesehatan mental.',
+        'Terima kasih sudah berani membuka diri. Percayalah, masa sulit ini akan berlalu.',
+      ]);
+    } else if (happyCount > 0) {
+      primaryMood = 'Senang';
+      emoji = '😊';
+      moodAbbr = 'Bh';
+      accuracy = '88%';
+      observations.addAll([
+        'Energi positif dan suasana hati yang cerah terpancar dari ceritamu hari ini.',
+        'Kamu berada dalam ritme emosi yang sangat sehat dan berenergi.',
+        'Pertahankan momen bahagia ini dan bagikan energimu kepada orang-orang terdekat.',
+      ]);
     } else {
-      return {
-        'primaryMood': 'Tenang',
-        'emoji': '😊',
-        'moodAbbr': 'Te',
-        'accuracy': '90%',
-        'observations': [
-          'Suasana hatimu hari ini terpantau tenang, damai, dan sangat stabil.',
-          'Tidak terdeteksi adanya tekanan stres atau kecemasan yang berlebihan.',
-          'Pertahankan ketenangan pikiran ini dengan terus melakukan kebiasaan baik.',
-        ],
-      };
+      primaryMood = 'Tenang';
+      emoji = '🙂';
+      moodAbbr = 'Te';
+      accuracy = '80%';
+      observations.addAll([
+        'Suasana hatimu hari ini terpantau tenang, damai, dan relatif stabil.',
+        'Tidak terdeteksi adanya tekanan stres atau kecemasan yang berlebihan dari obrolanmu.',
+        'Pertahankan ketenangan pikiran ini dengan terus menjaga keseimbangan aktivitasmu.',
+      ]);
     }
+
+    if (_totalSadFrames > 3 && _totalSadFrames > _totalHappyFrames) {
+      observations.add('Kamera AI mendeteksi raut wajahmu sempat tampak sedih atau menahan beban emosional.');
+    } else if (_totalHappyFrames > 3) {
+      observations.add('Kamera AI mencatat kamu sempat tersenyum beberapa kali selama sesi ini.');
+    } else if (_totalNeutralFrames > 5) {
+      observations.add('Ekspresi wajahmu terpantau tenang dan stabil sepanjang panggilan.');
+    }
+
+    return {
+      'primaryMood': primaryMood,
+      'emoji': emoji,
+      'moodAbbr': moodAbbr,
+      'accuracy': accuracy,
+      'observations': observations,
+    };
   }
 
   void _endCall() {
@@ -524,6 +803,10 @@ class _VideoCallScreenState extends State<VideoCallScreen>
                         _buildAiAvatar(),
                         const SizedBox(height: 16),
                         _buildStatusBadge(),
+                        if (_sttErrorMessage != null && !_showTextInput) ...[
+                          const SizedBox(height: 10),
+                          _buildSttHint(),
+                        ],
                       ],
                     ),
                   ),
@@ -580,11 +863,11 @@ class _VideoCallScreenState extends State<VideoCallScreen>
   // ─────────────────────────────────────────────
   Widget _buildTopBar() {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 0),
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: [
-          // Live badge
+          // Live badge - compact & responsive agar tidak pernah overflow
           _GlassChip(
             child: Row(
               mainAxisSize: MainAxisSize.min,
@@ -592,8 +875,8 @@ class _VideoCallScreenState extends State<VideoCallScreen>
                 AnimatedBuilder(
                   animation: _orbGlow,
                   builder: (_, __) => Container(
-                    width: 8,
-                    height: 8,
+                    width: 7,
+                    height: 7,
                     decoration: BoxDecoration(
                       shape: BoxShape.circle,
                       color: _VColors.statusListen,
@@ -601,21 +884,21 @@ class _VideoCallScreenState extends State<VideoCallScreen>
                         BoxShadow(
                           color: _VColors.statusListen
                               .withValues(alpha: (1.0 - _orbGlow.value) * 0.9),
-                          blurRadius: 10,
+                          blurRadius: 8,
                           spreadRadius: 2,
                         ),
                       ],
                     ),
                   ),
                 ),
-                const SizedBox(width: 7),
+                const SizedBox(width: 6),
                 Text(
-                  '● SIMULASI PANGGILAN  $_formattedTime',
+                  'SESI AKTIF  $_formattedTime',
                   style: const TextStyle(
                     color: Colors.white,
                     fontWeight: FontWeight.w700,
                     fontSize: 11,
-                    letterSpacing: 0.8,
+                    letterSpacing: 0.5,
                   ),
                 ),
               ],
@@ -624,10 +907,11 @@ class _VideoCallScreenState extends State<VideoCallScreen>
 
           // Nama app
           Row(
+            mainAxisSize: MainAxisSize.min,
             children: [
               Container(
-                width: 28,
-                height: 28,
+                width: 26,
+                height: 26,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   gradient: const LinearGradient(
@@ -641,15 +925,15 @@ class _VideoCallScreenState extends State<VideoCallScreen>
                   ],
                 ),
                 child: const Icon(Icons.auto_awesome_rounded,
-                    color: Colors.white, size: 14),
+                    color: Colors.white, size: 13),
               ),
-              const SizedBox(width: 8),
+              const SizedBox(width: 6),
               const Text(
                 'SoulTalk AI',
                 style: TextStyle(
                   color: Colors.white,
                   fontWeight: FontWeight.w700,
-                  fontSize: 14,
+                  fontSize: 13,
                   letterSpacing: 0.2,
                 ),
               ),
@@ -664,9 +948,15 @@ class _VideoCallScreenState extends State<VideoCallScreen>
   //  Avatar AI + ring glow + wave indicator
   // ─────────────────────────────────────────────
   Widget _buildAiAvatar() {
-    return AnimatedBuilder(
-      animation: Listenable.merge([_orbScale, _glowOpacity, _waveAnim]),
-      builder: (_, __) {
+    return GestureDetector(
+      onTap: () {
+        if (_statusIndex == 0 && !_muted && !_isListening) {
+          _startListening();
+        }
+      },
+      child: AnimatedBuilder(
+        animation: Listenable.merge([_orbScale, _glowOpacity, _waveAnim]),
+        builder: (_, __) {
         final isSpeaking = _statusIndex == 2;
         final glowColor = _statusColors[_statusIndex];
 
@@ -780,62 +1070,107 @@ class _VideoCallScreenState extends State<VideoCallScreen>
           ),
         );
       },
-    );
-  }
+    ),
+  );
+}
 
   // ─────────────────────────────────────────────
   //  Badge status AI
   // ─────────────────────────────────────────────
   Widget _buildStatusBadge() {
+    String badgeText;
+    if (_statusIndex == 0) {
+      badgeText = _isListening ? '🎤  Mendengarkan...' : '👂  Siap Mendengar';
+    } else {
+      badgeText = '${_statusIcons[_statusIndex]}  ${_statuses[_statusIndex]}';
+    }
+
     return FadeTransition(
       opacity: _statusAnim,
-      child: AnimatedSwitcher(
-        duration: const Duration(milliseconds: 350),
-        transitionBuilder: (child, anim) => ScaleTransition(
-          scale: Tween<double>(begin: 0.85, end: 1.0).animate(
-            CurvedAnimation(parent: anim, curve: Curves.easeOutBack),
+      child: GestureDetector(
+        onTap: () {
+          if (_statusIndex == 0 && !_muted) {
+            _startListening();
+          }
+        },
+        child: AnimatedSwitcher(
+          duration: const Duration(milliseconds: 350),
+          transitionBuilder: (child, anim) => ScaleTransition(
+            scale: Tween<double>(begin: 0.85, end: 1.0).animate(
+              CurvedAnimation(parent: anim, curve: Curves.easeOutBack),
+            ),
+            child: FadeTransition(opacity: anim, child: child),
           ),
-          child: FadeTransition(opacity: anim, child: child),
-        ),
-        child: Container(
-          key: ValueKey(_statusIndex),
-          padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(30),
-            gradient: LinearGradient(
-              colors: [
-                _statusColors[_statusIndex].withValues(alpha: 0.85),
-                _statusColors[_statusIndex].withValues(alpha: 0.60),
+          child: Container(
+            key: ValueKey('$_statusIndex-$_isListening'),
+            padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 10),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(30),
+              gradient: LinearGradient(
+                colors: [
+                  _statusColors[_statusIndex].withValues(alpha: 0.85),
+                  _statusColors[_statusIndex].withValues(alpha: 0.60),
+                ],
+              ),
+              border: Border.all(
+                color: _statusColors[_statusIndex].withValues(alpha: 0.5),
+                width: 1,
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: _statusColors[_statusIndex].withValues(alpha: 0.35),
+                  blurRadius: 20,
+                  offset: const Offset(0, 6),
+                ),
               ],
             ),
-            border: Border.all(
-              color: _statusColors[_statusIndex].withValues(alpha: 0.5),
-              width: 1,
-            ),
-            boxShadow: [
-              BoxShadow(
-                color: _statusColors[_statusIndex].withValues(alpha: 0.35),
-                blurRadius: 20,
-                offset: const Offset(0, 6),
-              ),
-            ],
-          ),
-          child: Row(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const _PulsingDots(color: Colors.white),
-              const SizedBox(width: 10),
-              Text(
-                '${_statusIcons[_statusIndex]}  ${_statuses[_statusIndex]}',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontWeight: FontWeight.w700,
-                  fontSize: 13,
-                  letterSpacing: 0.3,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (_isListening || _statusIndex != 0)
+                  const _PulsingDots(color: Colors.white)
+                else
+                  const Icon(Icons.touch_app_rounded, color: Colors.white, size: 14),
+                const SizedBox(width: 8),
+                Text(
+                  badgeText,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                    fontSize: 13,
+                    letterSpacing: 0.3,
+                  ),
                 ),
-              ),
-            ],
+              ],
+            ),
           ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSttHint() {
+    return GestureDetector(
+      onTap: () {
+        setState(() => _showTextInput = true);
+      },
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+        decoration: BoxDecoration(
+          color: _VColors.glassDark,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: _VColors.glassBorder),
+        ),
+        child: const Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.keyboard_outlined, color: _VColors.orbBlue, size: 14),
+            SizedBox(width: 6),
+            Text(
+              'Suara terkendala. Ketuk untuk mengetik pesan.',
+              style: TextStyle(color: Colors.white70, fontSize: 11),
+            ),
+          ],
         ),
       ),
     );
@@ -903,7 +1238,8 @@ class _VideoCallScreenState extends State<VideoCallScreen>
                 // Bubble percakapan
                 ConstrainedBox(
                   constraints: BoxConstraints(
-                    maxHeight: keyboardOpen ? 320 : 180,
+                    minHeight: keyboardOpen ? 120 : 160,
+                    maxHeight: keyboardOpen ? 320 : 260,
                   ),
                   child: ListView.builder(
                     controller: _chatScroll,
@@ -926,8 +1262,8 @@ class _VideoCallScreenState extends State<VideoCallScreen>
   // ─────────────────────────────────────────────
   Widget _buildUserCamera() {
     return Container(
-      width: 82,
-      height: 112,
+      width: 96,
+      height: 128,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(18),
         border: Border.all(color: _VColors.glassBorder, width: 2),
@@ -978,6 +1314,57 @@ class _VideoCallScreenState extends State<VideoCallScreen>
                           color: Color(0x80FFFFFF), size: 26),
                     ),
                   ),
+
+            // Live Emotion Badge (atas tengah)
+            if (_cameraOn && _isCameraInitialized)
+              Positioned(
+                top: 5,
+                left: 4,
+                right: 4,
+                child: Center(
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2.5),
+                    decoration: BoxDecoration(
+                      color: Colors.black.withValues(alpha: 0.70),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: _currentEmotion == 'Sedih'
+                            ? const Color(0xFFEF5350)
+                            : (_currentEmotion == 'Senang'
+                                ? const Color(0xFF66BB6A)
+                                : Colors.white24),
+                        width: 1,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          _currentEmotionEmoji,
+                          style: const TextStyle(fontSize: 10),
+                        ),
+                        const SizedBox(width: 3),
+                        Flexible(
+                          child: Text(
+                            _currentEmotion,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              color: _currentEmotion == 'Sedih'
+                                  ? const Color(0xFFFFCDD2)
+                                  : (_currentEmotion == 'Senang'
+                                      ? const Color(0xFFC8E6C9)
+                                      : Colors.white),
+                              fontSize: 9,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
 
             // Label "Kamu"
             Positioned(
@@ -1052,17 +1439,22 @@ class _VideoCallScreenState extends State<VideoCallScreen>
           children: [
             // Mikrofon
             _ControlBtn(
-              icon: _muted ? Icons.mic_off_rounded : Icons.mic_rounded,
-              label: _muted ? 'Bisu' : 'Mikrofon',
+              icon: _muted
+                  ? Icons.mic_off_rounded
+                  : (_isListening ? Icons.mic_rounded : Icons.mic_none_rounded),
+              label: _muted ? 'Bisu' : (_isListening ? 'Mendengar' : 'Bicara'),
               active: !_muted,
               onTap: () {
-                setState(() {
-                  _muted = !_muted;
-                });
                 if (_muted) {
-                  _stopListening();
-                } else if (_statusIndex == 0) {
-                  _startListening();
+                  setState(() => _muted = false);
+                  if (_statusIndex == 0) _startListening();
+                } else {
+                  if (!_isListening && _statusIndex == 0) {
+                    _startListening();
+                  } else {
+                    setState(() => _muted = true);
+                    _stopListening();
+                  }
                 }
               },
             ),
@@ -1217,7 +1609,10 @@ class _VideoCallScreenState extends State<VideoCallScreen>
     }
     try {
       final url = Uri.parse('${ApiHelper.baseUrl}/api/chat');
-      final body = jsonEncode({'message': input});
+      final body = jsonEncode({
+        'message': input,
+        'current_emotion': _currentEmotion,
+      });
       final res = await http.post(
         url,
         headers: ApiHelper.headers(),
@@ -1329,18 +1724,27 @@ class _VideoCallScreenState extends State<VideoCallScreen>
       "potong nadi", "self harm", "suicide"
     ];
     if (distressKeywords.any((k) => clean.contains(k))) {
-      return 'Aku mendengar betapa berat dan menyakitkannya situasi yang sedang kamu lalui saat ini. Sebagai teman AI, aku tidak bisa memberikan perawatan medis atau menggantikan bantuan profesional. Keselamatanmu sangat berharga. Tolong hubungi layanan darurat nasional di 119, hubungi keluarga atau teman dekat, atau jangkau hotline pencegahan bunuh diri/krisis terdekat segera. Mohon tetap aman, ya.';
+      return 'Aku mendengar betapa berat dan menyakitkannya situasi yang sedang kamu lalui saat ini. Sebagai teman AI, aku tidak bisa memberikan perawatan medis atau menggantikan bantuan profesional. Keselamatanmu sangat berharga. Tolong hubungi layanan darurat nasional di 119, hubungi keluarga atau teman dekat, atau jangkau hotline krisis terdekat segera. Mohon tetap aman, ya.';
     }
-    if (clean.contains('stres') || clean.contains('lelah') || clean.contains('kerja')) {
-      return 'Lagi capek banget ya? Istirahat dulu gih, jangan dipaksain. Apa yang bikin paling berasa berat hari ini?';
+    if (clean.contains('halo') || clean.contains('hai') || clean.contains('pagi') || clean.contains('siang') || clean.contains('malam') || clean.contains('assalamu')) {
+      return 'Halo juga! Senang sekali bisa tersambung denganmu hari ini. Bagaimana kabarmu? Aku siap mendengarkan apa pun yang ingin kamu ceritakan.';
     }
-    if (clean.contains('cemas') || clean.contains('takut') || clean.contains('panik')) {
-      return 'Tarik napas dulu pelan-pelan... Hembusin. Nggak apa-apa, santai aja. Aku di sini kok.';
+    if (clean.contains('terima kasih') || clean.contains('makasih') || clean.contains('thanks')) {
+      return 'Sama-sama! Terima kasih banyak sudah mau berbagi cerita denganku. Aku selalu ada di sini kapan pun kamu butuh teman bicara.';
     }
-    if (clean.contains('sedih') || clean.contains('kecewa') || clean.contains('nangis')) {
-      return 'Sedih atau pengen nangis itu wajar kok, keluarin aja. Mau cerita sekarang atau cuma mau ditemenin?';
+    if (clean.contains('senang') || clean.contains('bahagia') || clean.contains('lega') || clean.contains('syukur') || clean.contains('alhamdulillah')) {
+      return 'Wah, senang sekali mendengarnya! Energi positifmu terasa menular. Boleh ceritakan apa yang membuat hatimu merasa begitu bahagia hari ini?';
     }
-    return 'Iya, aku dengerin kok. Terus gimana kelanjutannya?';
+    if (clean.contains('stres') || clean.contains('lelah') || clean.contains('kerja') || clean.contains('capek') || clean.contains('pusing')) {
+      return 'Lagi capek banget ya? Istirahat dulu sejenak gih, jangan terlalu memaksakan diri. Apa yang bikin terasa paling berat hari ini?';
+    }
+    if (clean.contains('cemas') || clean.contains('takut') || clean.contains('panik') || clean.contains('khawatir')) {
+      return 'Tarik napas dulu pelan-pelan... Hembuskan perlahan. Nggak apa-apa, kamu aman sekarang. Aku ada di sini mendampingimu.';
+    }
+    if (clean.contains('sedih') || clean.contains('kecewa') || clean.contains('nangis') || clean.contains('hancur') || clean.contains('galau')) {
+      return 'Sedih atau ingin menangis itu wajar kok, jangan ditahan kalau ingin meluapkannya. Mau bercerita sekarang atau ingin ditemani dalam hening dulu?';
+    }
+    return 'Iya, aku mendengarkanmu dengan baik. Boleh ceritakan lebih lanjut?';
   }
 }
 

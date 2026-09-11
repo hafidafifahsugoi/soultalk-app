@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 import 'package:provider/provider.dart';
 import '../providers/session_provider.dart';
 import 'main_shell.dart';
+import '../widgets/mood_bunny_icon.dart';
 
 // ─────────────────────────────────────────────────────────────
 //  Palet warna
@@ -132,23 +133,29 @@ class _SummaryScreenState extends State<SummaryScreen>
 
   String _getCalmPercentage() {
     final abbr = widget.sessionItem?.moodAbbr ?? widget.moodAbbr ?? 'St';
+    if (abbr == '--') return '-';
     if (abbr == 'Te') return '90%';
     if (abbr == 'Cm') return '40%';
     if (abbr == 'Sd') return '50%';
+    if (abbr == 'Bh') return '85%';
     return '72%';
   }
   String _getStressPercentage() {
     final abbr = widget.sessionItem?.moodAbbr ?? widget.moodAbbr ?? 'St';
+    if (abbr == '--') return '-';
     if (abbr == 'Te') return '15%';
     if (abbr == 'Cm') return '78%';
     if (abbr == 'Sd') return '60%';
+    if (abbr == 'Bh') return '10%';
     return '85%';
   }
   String _getEnergyPercentage() {
     final abbr = widget.sessionItem?.moodAbbr ?? widget.moodAbbr ?? 'St';
+    if (abbr == '--') return '-';
     if (abbr == 'Te') return '80%';
     if (abbr == 'Cm') return '50%';
     if (abbr == 'Sd') return '40%';
+    if (abbr == 'Bh') return '90%';
     return '60%';
   }
 
@@ -308,11 +315,15 @@ class _SummaryScreenState extends State<SummaryScreen>
                           letterSpacing: -0.4,
                         )),
                     const SizedBox(height: 4),
-                    Text('Terima kasih sudah bercerita. Ini yang kita pelajari hari ini.',
-                        style: TextStyle(
-                          color: Colors.white.withValues(alpha: 0.82),
-                          fontSize: 13,
-                        )),
+                    Text(
+                      primaryMood == 'Belum Teranalisis'
+                          ? 'Sesi panggilan telah selesai. Belum ada obrolan yang terekam untuk dianalisis.'
+                          : 'Terima kasih sudah bercerita. Ini yang kita pelajari hari ini.',
+                      style: TextStyle(
+                        color: Colors.white.withValues(alpha: 0.82),
+                        fontSize: 13,
+                      ),
+                    ),
                   ],
                 ),
               ),
@@ -369,16 +380,9 @@ class _SummaryScreenState extends State<SummaryScreen>
           // Emoji + mood
           Row(
             children: [
-              Container(
-                width: 56,
-                height: 56,
-                decoration: BoxDecoration(
-                  color: _C.accent.withValues(alpha: 0.15),
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Center(
-                  child: Text(emoji, style: const TextStyle(fontSize: 28)),
-                ),
+              MoodBunnyIcon(
+                emoji: emoji,
+                size: 56,
               ),
               const SizedBox(width: 16),
               Expanded(
@@ -401,8 +405,10 @@ class _SummaryScreenState extends State<SummaryScreen>
                             color: _C.accent, shape: BoxShape.circle),
                       ),
                       const SizedBox(width: 6),
-                      Text('Suasana hati dominan',
-                          style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurface.withValues(alpha: 0.6))),
+                      Text(
+                        primaryMood == 'Belum Teranalisis' ? 'Belum Cukup Data' : 'Suasana hati dominan',
+                        style: TextStyle(fontSize: 12, color: theme.colorScheme.onSurface.withValues(alpha: 0.6)),
+                      ),
                     ]),
                   ],
                 ),
@@ -641,18 +647,28 @@ class _SummaryScreenState extends State<SummaryScreen>
           shape:
               RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         ),
-        icon: const Icon(Icons.download_rounded, color: Colors.white, size: 18),
-        label: const Text('Simpan Lembar Cerita',
-            style: TextStyle(
-              color: Colors.white,
-              fontWeight: FontWeight.w700,
-              fontSize: 15,
-            )),
+        icon: Icon(
+          primaryMood == 'Belum Teranalisis' ? Icons.home_rounded : Icons.download_rounded,
+          color: Colors.white,
+          size: 18,
+        ),
+        label: Text(
+          primaryMood == 'Belum Teranalisis' ? 'Kembali ke Beranda' : 'Simpan Lembar Cerita',
+          style: const TextStyle(
+            color: Colors.white,
+            fontWeight: FontWeight.w700,
+            fontSize: 15,
+          ),
+        ),
       ),
     );
   }
 
   void _onSave() {
+    if (primaryMood == 'Belum Teranalisis') {
+      _goHome();
+      return;
+    }
     final String currentTitle = widget.fromCall 
         ? 'Refleksi Sesi Panggilan' 
         : (widget.sessionItem?.title ?? 'Sesi Cerita');

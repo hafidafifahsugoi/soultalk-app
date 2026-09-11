@@ -158,6 +158,26 @@ class DatabaseHelper {
     );
   }
 
+  Future<List<Map<String, dynamic>>> getMoodRecordsByMonth(int year, int month) async {
+    final db = await instance.database;
+    final monthStr = month.toString().padLeft(2, '0');
+    final prefix = "$year-$monthStr-%";
+    return await db.query(
+      'mood_records',
+      where: 'date LIKE ?',
+      whereArgs: [prefix],
+      orderBy: 'date ASC',
+    );
+  }
+
+  Future<List<Map<String, dynamic>>> getAllMoodRecords() async {
+    final db = await instance.database;
+    return await db.query(
+      'mood_records',
+      orderBy: 'date ASC',
+    );
+  }
+
   Future<void> clearAllMoodRecords() async {
     final db = await instance.database;
     await db.delete('mood_records');

@@ -8,6 +8,7 @@ import '../providers/session_provider.dart';
 import '../providers/theme_provider.dart';
 import '../providers/profile_provider.dart';
 import '../theme/app_theme.dart';
+import '../services/auth_service.dart';
 import 'login_screen.dart';
 import 'edit_profile_screen.dart';
 import 'change_password_screen.dart';
@@ -107,17 +108,22 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 style: TextStyle(color: AppColors.mutedForeground)),
           ),
           TextButton(
-            onPressed: () {
+            onPressed: () async {
               Navigator.of(ctx).pop();
-              Navigator.of(context).pushAndRemoveUntil(
-                PageRouteBuilder(
-                  transitionDuration: const Duration(milliseconds: 350),
-                  pageBuilder: (_, __, ___) => const LoginScreen(),
-                  transitionsBuilder: (_, anim, __, child) =>
-                      FadeTransition(opacity: anim, child: child),
-                ),
-                (route) => false,
-              );
+              await AuthService().signOut();
+              await ApiHelper.clearToken();
+              if (mounted) {
+                context.read<ProfileProvider>().clearProfile();
+                Navigator.of(context).pushAndRemoveUntil(
+                  PageRouteBuilder(
+                    transitionDuration: const Duration(milliseconds: 350),
+                    pageBuilder: (_, __, ___) => const LoginScreen(),
+                    transitionsBuilder: (_, anim, __, child) =>
+                        FadeTransition(opacity: anim, child: child),
+                  ),
+                  (route) => false,
+                );
+              }
             },
             child: const Text('Keluar',
                 style: TextStyle(
@@ -373,54 +379,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ),
             ],
           ),
-          const SizedBox(height: 20),
-
-          // Statistik tiga kolom
-          Container(
-            padding: const EdgeInsets.symmetric(vertical: 14),
-            decoration: BoxDecoration(
-              color: Colors.white.withValues(alpha: 0.15),
-              borderRadius: BorderRadius.circular(18),
-            ),
-            child: Row(
-              children: [
-                _statItem('24', 'Total Sesi'),
-                _statDivider(),
-                _statItem('12', 'Hari Beruntun'),
-                _statDivider(),
-                _statItem('82%', 'Rata-rata\nTenang'),
-              ],
-            ),
-          ),
         ],
       ),
     );
   }
-
-  Widget _statItem(String value, String label) => Expanded(
-        child: Column(
-          children: [
-            Text(value,
-                style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800)),
-            const SizedBox(height: 3),
-            Text(label,
-                textAlign: TextAlign.center,
-                style: TextStyle(
-                    color: Colors.white.withValues(alpha: 0.80),
-                    fontSize: 11,
-                    height: 1.3)),
-          ],
-        ),
-      );
-
-  Widget _statDivider() => Container(
-        width: 1,
-        height: 32,
-        color: Colors.white.withValues(alpha: 0.25),
-      );
 
   // ─────────────────────────────────────────────
   //  Label section
