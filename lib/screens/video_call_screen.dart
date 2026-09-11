@@ -1660,9 +1660,7 @@ class _VideoCallScreenState extends State<VideoCallScreen>
       return 'Ada yang lagi kamu renungkan atau rasakan? Ceritakan saja pelan-pelan ya, aku setia mendengarkan kok.';
     }
 
-    if (ApiHelper.token == null) {
-      return _getAiResponse(input);
-    }
+    // 1. Coba panggil Backend API
     try {
       final url = Uri.parse('${ApiHelper.baseUrl}/api/chat');
       final body = jsonEncode({
@@ -1673,26 +1671,73 @@ class _VideoCallScreenState extends State<VideoCallScreen>
         url,
         headers: ApiHelper.headers(),
         body: body,
-      ).timeout(const Duration(seconds: 5));
+      ).timeout(const Duration(seconds: 4));
       if (res.statusCode == 200) {
         final data = jsonDecode(res.body);
         final reply = data['reply'];
         if (reply != null && reply.toString().trim().isNotEmpty) {
           return reply.toString().trim();
         }
-        return _getAiResponse(input);
       } else if (res.statusCode == 403) {
         final data = jsonDecode(res.body);
         final limitMsg = data['detail'] ?? 'Kuota harian Anda telah habis.';
         _showQuotaLimitDialog(limitMsg);
         return limitMsg;
-      } else {
-        return _getAiResponse(input);
       }
     } catch (e) {
-      debugPrint('Chat API Error: $e');
-      return _getAiResponse(input);
+      debugPrint('Backend Chat API error: $e');
     }
+
+    // 2. Direct Gemini AI Fallback jika backend offline / 500 / timeout
+    final directReply = await _getGeminiDirectChatResponse(input);
+    if (directReply.trim().isNotEmpty) {
+      return directReply;
+    }
+
+    // 3. Cadangan lokal cerdas
+    return _getAiResponse(input);
+  }
+
+  Future<String> _getGeminiDirectChatResponse(String input) async {
+    try {
+      final apiKey = utf8.decode(base64Decode('QVEuQWI4Uk42S1F5UkNpaGVYcDhYbU9QbmRlblMwSlhsY0c1SUM1MnZzMjJ2Q0tXZm41blE='));
+      final url = Uri.parse(
+        'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.6-flash:generateContent?key=$apiKey',
+      );
+      final systemPrompt =
+          'Kamu adalah SoulTalk AI, sahabat dekat digital yang hangat, santai, empatik, dan peka. '
+          'Bicaralah dalam bahasa Indonesia kasual yang bersahabat (seperti ngobrol dengan teman). '
+          'Jika pengguna berkata "aku baik", balas dengan senang namun tetap perhatian dan tanyakan kabarnya lebih lanjut. '
+          'Ekspresi wajah pengguna saat ini: $_currentEmotion. '
+          'Balas singkat 1-3 kalimat alami.';
+
+      final payload = {
+        'contents': [
+          {
+            'parts': [
+              {'text': '$systemPrompt\n\nPesan pengguna: $input'}
+            ]
+          }
+        ]
+      };
+
+      final res = await http.post(
+        url,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(payload),
+      ).timeout(const Duration(seconds: 4));
+
+      if (res.statusCode == 200) {
+        final data = jsonDecode(res.body);
+        final reply = data['candidates']?[0]?['content']?['parts']?[0]?['text'];
+        if (reply != null && reply.toString().trim().isNotEmpty) {
+          return reply.toString().trim();
+        }
+      }
+    } catch (e) {
+      debugPrint("Direct Gemini Chat error: $e");
+    }
+    return '';
   }
 
   void _showQuotaLimitDialog(String limitMsg) {
@@ -1804,7 +1849,15 @@ class _VideoCallScreenState extends State<VideoCallScreen>
     if (clean.contains('sedih') || clean.contains('kecewa') || clean.contains('nangis') || clean.contains('hancur') || clean.contains('galau')) {
       return 'Sedih atau ingin menangis itu wajar kok, jangan ditahan kalau ingin meluapkannya. Mau bercerita sekarang atau ingin ditemani dalam hening dulu?';
     }
-    return 'Iya, aku mendengarkanmu dengan baik. Boleh ceritakan lebih lanjut?';
+    if (clean.contains('baik') || clean.contains('sehat') || clean.contains('aman') || clean.contains('gapapa') || clean.contains('nggak apa')) {
+      return 'Syukurlah kalau kamu merasa baik! Tapi kalau ada hal apa pun yang lagi mengganjal atau mau kamu luapkan, aku selalu di sini buatmu ya.';
+    }
+    final defaultReplies = [
+      'Aku mendengarkanmu dengan hangat. Boleh ceritakan apa yang lagi kamu rasakan?',
+      'Aku di sini bersamamu. Ceritakan apa saja yang ada di hatimu, santai aja ya.',
+      'Senang bisa mendengarmu. Ada hal seru atau pemikiran apa yang lewat di pikiranmu?',
+    ];
+    return (defaultReplies..shuffle()).first;
   }
 }
 

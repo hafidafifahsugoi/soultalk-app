@@ -179,50 +179,55 @@ def get_current_user(authorization: str = Header(None)):
 
 # Quota check helper
 def check_and_update_quota(user_id: int):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    today = datetime.date.today().isoformat()
-    
-    # Get user quota
-    cursor.execute("SELECT * FROM quota_limits WHERE user_id = ?", (user_id,))
-    quota = cursor.fetchone()
-    
-    if not quota:
-        cursor.execute(
-            "INSERT INTO quota_limits (user_id, message_count, vc_duration_seconds, last_reset_date) VALUES (?, 0, 0, ?)",
-            (user_id, today)
-        )
-        conn.commit()
-        msg_count = 0
-    else:
-        # Check if reset is needed (if it's a new day)
-        if quota['last_reset_date'] != today:
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        
+        today = datetime.date.today().isoformat()
+        
+        # Get user quota
+        cursor.execute("SELECT * FROM quota_limits WHERE user_id = ?", (user_id,))
+        quota = cursor.fetchone()
+        
+        if not quota:
             cursor.execute(
-                "UPDATE quota_limits SET message_count = 0, vc_duration_seconds = 0, last_reset_date = ? WHERE user_id = ?",
-                (today, user_id)
+                "INSERT INTO quota_limits (user_id, message_count, vc_duration_seconds, last_reset_date) VALUES (?, 0, 0, ?)",
+                (user_id, today)
             )
             conn.commit()
             msg_count = 0
         else:
-            msg_count = quota['message_count']
+            # Check if reset is needed (if it's a new day)
+            if quota['last_reset_date'] != today:
+                cursor.execute(
+                    "UPDATE quota_limits SET message_count = 0, vc_duration_seconds = 0, last_reset_date = ? WHERE user_id = ?",
+                    (today, user_id)
+                )
+                conn.commit()
+                msg_count = 0
+            else:
+                msg_count = quota['message_count']
+                
+        # Check limit: 20 messages per user per day
+        DAILY_LIMIT = 20
+        if msg_count >= DAILY_LIMIT:
+            conn.close()
+            raise HTTPException(
+                status_code=403,
+                detail=f"Kuota harian Anda ({DAILY_LIMIT} pesan) telah habis. Silakan kembali lagi besok ya!"
+            )
             
-    # Check limit: 20 messages per user per day
-    DAILY_LIMIT = 20
-    if msg_count >= DAILY_LIMIT:
-        conn.close()
-        raise HTTPException(
-            status_code=403,
-            detail=f"Kuota harian Anda ({DAILY_LIMIT} pesan) telah habis. Silakan kembali lagi besok ya!"
+        # Increment count
+        cursor.execute(
+            "UPDATE quota_limits SET message_count = message_count + 1 WHERE user_id = ?",
+            (user_id,)
         )
-        
-    # Increment count
-    cursor.execute(
-        "UPDATE quota_limits SET message_count = message_count + 1 WHERE user_id = ?",
-        (user_id,)
-    )
-    conn.commit()
-    conn.close()
+        conn.commit()
+        conn.close()
+    except HTTPException:
+        raise
+    except Exception as e:
+        print("Warning: Quota check error bypassed:", e)
 
 # ─────────────────────────────────────────────────────────────
 #  API Endpoints

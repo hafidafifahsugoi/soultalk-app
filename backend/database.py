@@ -6,14 +6,17 @@ if os.environ.get("VERCEL"):
 else:
     DB_FILE = os.path.join(os.path.dirname(__file__), "soultalk_server.db")
 
-def get_db_connection():
-    conn = sqlite3.connect(DB_FILE)
-    conn.execute("PRAGMA foreign_keys = ON")
-    conn.row_factory = sqlite3.Row
-    return conn
+_initialized = False
 
-def init_db():
-    conn = get_db_connection()
+def init_db(existing_conn=None):
+    should_close = False
+    if existing_conn is None:
+        conn = sqlite3.connect(DB_FILE)
+        conn.execute("PRAGMA foreign_keys = ON")
+        should_close = True
+    else:
+        conn = existing_conn
+
     cursor = conn.cursor()
     
     # Create users table
@@ -78,8 +81,29 @@ def init_db():
         pass
     
     conn.commit()
-    conn.close()
+    if should_close:
+        conn.close()
+
+def get_db_connection():
+    global _initialized
+    conn = sqlite3.connect(DB_FILE)
+    conn.execute("PRAGMA foreign_keys = ON")
+    conn.row_factory = sqlite3.Row
+    if not _initialized:
+        try:
+            init_db(conn)
+            _initialized = True
+        except Exception as e:
+            print("DB init error:", e)
+    return conn
+
+try:
+    init_db()
+    _initialized = True
+except Exception:
+    pass
 
 if __name__ == "__main__":
     init_db()
     print("Database initialized successfully at:", DB_FILE)
+
